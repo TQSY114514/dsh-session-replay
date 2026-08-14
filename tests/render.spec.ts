@@ -108,14 +108,20 @@ describe('renderEvent', () => {
       name: 'read_file',
       ok: true,
       content: 'file content',
+      error: undefined,
     })
   })
 
-  it('marks failed tool results as not ok', () => {
-    const entry = renderEvent(toolResult(3, 4000, true), deps)
-    expect(entry).not.toBeNull()
-    expect(entry?.kind).toBe('tool-result')
-    if (entry !== null && entry.kind === 'tool-result') expect(entry.ok).toBe(false)
+  it('marks failed tool results as not ok and carries the failure identity', () => {
+    expect(renderEvent(toolResult(3, 4000, true), deps)).toEqual({
+      kind: 'tool-result',
+      seq: 3,
+      callId: 'c1',
+      name: 'read_file',
+      ok: false,
+      content: 'boom',
+      error: 'ToolError: E_FAIL',
+    })
   })
 
   it('leaves the tool name unresolved when deps do not know the call', () => {
@@ -126,7 +132,32 @@ describe('renderEvent', () => {
     expect(renderEvent({ type: 'turn/start', seq: 4, time: 5000, data: { turn: 1 } }, deps))
       .toEqual({ kind: 'turn-start', seq: 4, turn: 1 })
     expect(renderEvent({ type: 'turn/end', seq: 5, time: 6000, data: { turn: 1, reason: { kind: 'completed' } } }, deps))
-      .toEqual({ kind: 'turn-end', seq: 5, turn: 1, reason: 'completed' })
+      .toEqual({ kind: 'turn-end', seq: 5, turn: 1, reason: 'completed', detail: undefined })
+  })
+
+  it('renders aborted turn endings with their cancel cause', () => {
+    expect(renderEvent({
+      type: 'turn/end',
+      seq: 6,
+      time: 7000,
+      data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'hook', reason: 'policy denied' } } },
+    }, deps)).toEqual({
+      kind: 'turn-end', seq: 6, turn: 1, reason: 'aborted', detail: 'aborted by hook: policy denied',
+    })
+  })
+
+  it('renders error turn endings with the failure message', () => {
+    expect(renderEvent({
+      type: 'turn/end',
+      seq: 7,
+      time: 8000,
+      data: {
+        turn: 1,
+        reason: { kind: 'error', error: { message: 'provider timeout', code: 'E_TIMEOUT' } },
+      },
+    }, deps)).toEqual({
+      kind: 'turn-end', seq: 7, turn: 1, reason: 'error', detail: 'error: provider timeout (E_TIMEOUT)',
+    })
   })
 
   it('renders step boundaries', () => {

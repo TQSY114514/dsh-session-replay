@@ -405,8 +405,33 @@ packages/session/session-replay/
 
 ### M2 待办(CLI 播放器完整交互)
 
-- [ ] 交互播放器真人验证(需要真实 session:跑一次 `pnpm dsh` 任务后回放)
-- [ ] tool call 展开/折叠(当前 headless 已截断,交互模式加展开)
-- [ ] 错误/中断状态渲染(tool-result error、turn-end aborted/error)
-- [ ] `--compression none|zstd` 参数(当前默认 zstd,与 dsh 默认一致)
-- [ ] README(遵循官方包 README 规范)
+- [x] 交互播放器真人验证(需要真实 session:跑一次 `pnpm dsh` 任务后回放)
+- [x] tool call 展开/折叠(当前 headless 已截断,交互模式加展开)
+- [x] 错误/中断状态渲染(tool-result error、turn-end aborted/error)
+- [x] `--compression none|zstd` 参数(当前默认 zstd,与 dsh 默认一致)
+- [x] README(遵循官方包 README 规范)
+
+## 14. M2 执行记录(2026-08-14)
+
+### 已实现(30 个测试全绿 + `tsc -b` 干净)
+
+- **错误态渲染**(render.ts):`tool-result` 带 `error: "Name: Code"`;`turn-end` 带 `detail`——aborted 显示取消原因(`user`/`parent`/`hook: reason`/`disposed`/`legacy`),error 显示 `message (code)`。CLI 红色高亮。
+- **tool 行选中/展开**(player.ts):`up`/`down` 在 tool-call/tool-result 行间移动选中,`enter`/`e` 展开完整 args/result(状态行显示选中行)。
+- **`--compression zstd|none`**(cli):默认 zstd,与 dsh 存储默认一致;none 支持明文 `.jsonl` store。
+- **官方包 README**:遵循 repo 规范(Model Experience / Known Limitations),含 CLI 与 API 文档。
+
+### 真实运行验证(含错误场景)
+
+构造失败部署 + 用户中断的 session,`--headless` 输出:
+
+```
+[3] -> bash({"command":"pnpm run deploy --env production …","timeout":30000…)
+[4] bash ERROR (BashError: E_EXEC): Error: ENOENT: no such file …, ./deploy/config.prod.json
+[5] == Turn 1 end (error) == error: deployment failed (E_DEPLOY)
+[9] == Turn 2 end (aborted) == aborted: user
+```
+
+### 新增类型约束(写代码时确认)
+
+- `LlmFailure`: `{ message, code, status?, providerRetryAfterMs?, requestId? }` — turn-end error 取 `message (code)`。
+- `AgentCancelCause`: `user | parent | hook(reason) | disposed`,加 `legacy` 导入值。

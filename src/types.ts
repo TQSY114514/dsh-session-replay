@@ -43,9 +43,18 @@ export type TranscriptEntry =
     readonly name: string | undefined
     readonly ok: boolean
     readonly content: string
+    /** Formatted `name: code` of the internal failure identity, when one was recorded. */
+    readonly error: string | undefined
   }
   | { readonly kind: 'turn-start'; readonly seq: number; readonly turn: number }
-  | { readonly kind: 'turn-end'; readonly seq: number; readonly turn: number; readonly reason: string }
+  | {
+    readonly kind: 'turn-end'
+    readonly seq: number
+    readonly turn: number
+    readonly reason: string
+    /** Extra context for aborted/error endings (cancel cause, failure message). */
+    readonly detail: string | undefined
+  }
   | { readonly kind: 'step-start'; readonly seq: number; readonly turn: number; readonly step: number }
   | { readonly kind: 'step-end'; readonly seq: number; readonly turn: number; readonly step: number }
   | { readonly kind: 'todo'; readonly seq: number; readonly todos: readonly TodoSummary[] }

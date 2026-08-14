@@ -23,13 +23,14 @@ Engine, renderer, store reader, and CLI are implemented and green (28 vitest tes
 ## CLI
 
 ```
-dsh-replay list [--store <dir>]
-dsh-replay <session-id> [--store <dir>] [--speed 1|2|4|8] [--headless]
+dsh-replay list [--store <dir>] [--compression zstd|none]
+dsh-replay <session-id> [--store <dir>] [--compression zstd|none] [--speed 1|2|4|8] [--headless]
 ```
 
-- Store defaults to `~/.dsh/sessions` (`$DSH_HOME` overrides it).
-- Interactive keys: `space` play/pause, `s` step, `[`/`]` prev/next turn, `1/2/4/8` speed, `q` quit.
+- Store defaults to `~/.dsh/sessions` (`$DSH_HOME` overrides it); physical encoding defaults to `zstd` (`--compression none` for plain `.jsonl`).
+- Interactive keys: `space` play/pause, `s` step, `[`/`]` prev/next turn, `up`/`down` select a tool row, `enter` expand the full args/result, `1/2/4/8` speed, `q` quit.
 - `--headless` dumps the whole timeline and exits (useful for diffing/debugging).
+- Error states render in red: failed tool results carry the failure identity (`ERROR (Name: CODE)`), and aborted/error turn endings show the cancel cause or failure message.
 
 ## Layout
 
@@ -45,8 +46,8 @@ tests/       engine/render/fold unit tests + JSONL end-to-end integration test
 
 | Milestone | Scope |
 |---|---|
-| M1 ✅ | StoreReader + ReplayEngine + render + CLI list/headless (this commit) |
-| M2 | interactive player polish: tool-call expand/collapse, error/interrupt states |
+| M1 ✅ | StoreReader + ReplayEngine + render + CLI list/headless |
+| M2 ✅ | interactive polish: tool-call select/expand (up/down + enter), error/interrupt rendering, `--compression` |
 | M3 | `/replay` harness command + live follow-along (`session/event`) |
 | M4 | Web ReplayPanel |
 | M5 | two-run diff |

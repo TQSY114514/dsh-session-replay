@@ -1,4 +1,4 @@
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, TurnEndReason } from '@deepseek-ai/dsh-session'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { TranscriptEntry, ToolCallRef } from '../types.ts'
 
@@ -33,6 +33,20 @@ function toolCallRefs(content: readonly ContentBlock[]): ToolCallRef[] {
   return refs
 }
 
+/** Human-readable context for non-trivial turn endings (merge-extensible reasons fall through). */
+function turnEndDetail(reason: TurnEndReason): string | undefined {
+  switch (reason.kind) {
+    case 'aborted':
+      return reason.reason.kind === 'hook'
+        ? `aborted by hook: ${reason.reason.reason}`
+        : `aborted: ${reason.reason.kind}`
+    case 'error':
+      return `error: ${reason.error.message} (${reason.error.code})`
+    default:
+      return undefined
+  }
+}
+
 /**
  * Render one raw session event into a human-readable timeline row. Events that
  * carry no visible timeline meaning (`assistant/chunk`, seed markers, inbox
@@ -59,19 +73,27 @@ export function renderEvent(event: SessionEvent, deps: RenderDeps): TranscriptEn
     case 'tool/result': {
       const block = event.data.message.content[0]
       const callId = block?.toolCallId ?? ''
+      const failure = event.data.error
       return {
         kind: 'tool-result',
         seq: event.seq,
         callId,
         name: deps.toolName(callId),
-        ok: event.data.error === undefined && !(block?.isError ?? false),
+        ok: failure === undefined && !(block?.isError ?? false),
         content: block === undefined ? '' : textOf(block.content),
+        error: failure === undefined ? undefined : `${failure.name}: ${failure.code}`,
       }
     }
     case 'turn/start':
       return { kind: 'turn-start', seq: event.seq, turn: event.data.turn }
     case 'turn/end':
-      return { kind: 'turn-end', seq: event.seq, turn: event.data.turn, reason: String(event.data.reason.kind) }
+      return {
+        kind: 'turn-end',
+        seq: event.seq,
+        turn: event.data.turn,
+        reason: String(event.data.reason.kind),
+        detail: turnEndDetail(event.data.reason),
+      }
     case 'step/start':
       return { kind: 'step-start', seq: event.seq, turn: event.data.turn, step: event.data.step }
     case 'step/end':

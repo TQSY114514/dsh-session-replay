@@ -28,14 +28,20 @@ export function renderEntryLine(entry: TranscriptEntry): string {
       return color(36, `[${entry.seq}] -> ${entry.name}(${truncate(entry.args, 80)})`)
     case 'tool-result': {
       const name = entry.name ?? `call:${entry.callId.slice(0, 8)}`
-      const mark = entry.ok ? 'ok' : color(31, 'ERROR')
+      const mark = entry.error !== undefined
+        ? color(31, `ERROR (${entry.error})`)
+        : entry.ok
+          ? 'ok'
+          : color(31, 'ERROR')
       const detail = entry.content.length > 0 ? `: ${truncate(entry.content, 80)}` : ''
       return `[${entry.seq}] ${name} ${mark}${detail}`
     }
     case 'turn-start':
       return color(33, `[${entry.seq}] == Turn ${entry.turn} ==`)
-    case 'turn-end':
-      return color(33, `[${entry.seq}] == Turn ${entry.turn} end (${entry.reason}) ==`)
+    case 'turn-end': {
+      const detail = entry.detail === undefined ? '' : ` ${color(31, entry.detail)}`
+      return color(33, `[${entry.seq}] == Turn ${entry.turn} end (${entry.reason}) ==`) + detail
+    }
     case 'step-start':
       return color(90, `[${entry.seq}] step ${entry.turn}.${entry.step}`)
     case 'step-end':
@@ -47,17 +53,34 @@ export function renderEntryLine(entry: TranscriptEntry): string {
   }
 }
 
-function statusLine(engine: ReplayEngine): string {
+/** Full expandable text of a tool row (args or result content), for Enter-expand. */
+export function expandedToolText(entry: TranscriptEntry): string | null {
+  if (entry.kind === 'tool-call') return `${entry.name}(${entry.args})`
+  if (entry.kind === 'tool-result') {
+    const mark = entry.error !== undefined
+      ? `ERROR (${entry.error})`
+      : entry.ok
+        ? 'ok'
+        : 'ERROR'
+    return `${entry.name ?? entry.callId} ${mark}\n${entry.content}`
+  }
+  return null
+}
+
+function statusLine(engine: ReplayEngine, selected: TranscriptEntry | undefined): string {
   const state = engine.snapshot
   const marker = state.atEnd ? 'END' : state.playing ? '>' : '||'
   const folded = engine.folded
   const turn = folded.turn === undefined ? '-' : String(folded.turn)
   const todos = folded.todos.filter(item => item.status === 'in_progress').map(item => item.content).join('; ')
   const todoHint = todos.length > 0 ? ` in-progress: ${todos}` : ''
-  return `${marker} ${state.speed}x turn:${turn} ${state.cursor}/${state.total} tools:${folded.toolCallCount}${todoHint}`
+  const selHint = selected === undefined
+    ? ''
+    : ` | sel [${selected.seq}] ${selected.kind === 'tool-call' ? selected.name : (selected.kind === 'tool-result' ? (selected.name ?? selected.callId) : '')}`
+  return `${marker} ${state.speed}x turn:${turn} ${state.cursor}/${state.total} tools:${folded.toolCallCount}${todoHint}${selHint}`
 }
 
-const HELP_LINE = 'space play/pause | s step | [ ] prev/next turn | 1/2/4/8 speed | q quit'
+const HELP_LINE = 'space play/pause | s step | [ ] prev/next turn | up/down select tool | enter expand | 1/2/4/8 speed | q quit'
 
 /**
  * Run the interactive terminal player over an engine. Resolves when the user
@@ -67,7 +90,15 @@ export function runPlayer(engine: ReplayEngine): Promise<void> {
   return new Promise(resolve => {
     process.stdout.write(`${HELP_LINE}\n`)
 
+    // Tool rows in emit order, for up/down selection and enter-expand.
+    const toolRows: TranscriptEntry[] = []
+    let selectedIndex = -1
+
+    const selectedEntry = (): TranscriptEntry | undefined =>
+      selectedIndex >= 0 ? toolRows[selectedIndex] : undefined
+
     engine.onEmit = entry => {
+      if (entry.kind === 'tool-call' || entry.kind === 'tool-result') toolRows.push(entry)
       process.stdout.write(`\n${renderEntryLine(entry)}`)
     }
     engine.onEnd = () => {
@@ -77,7 +108,7 @@ export function runPlayer(engine: ReplayEngine): Promise<void> {
 
     let statusVisible = false
     const paintStatus = (): void => {
-      process.stdout.write(`\r\x1b[2K${statusLine(engine)}`)
+      process.stdout.write(`\r\x1b[2K${statusLine(engine, selectedEntry())}`)
       statusVisible = true
     }
 
@@ -94,6 +125,24 @@ export function runPlayer(engine: ReplayEngine): Promise<void> {
         process.stdout.write(`\n-- seeked to turn ${target} --`)
         paintStatus()
       }
+    }
+
+    const moveSelection = (direction: -1 | 1): void => {
+      if (toolRows.length === 0) return
+      selectedIndex = Math.min(
+        Math.max(selectedIndex + direction, 0),
+        toolRows.length - 1,
+      )
+      paintStatus()
+    }
+
+    const expandSelection = (): void => {
+      const entry = selectedEntry()
+      if (entry === undefined) return
+      const text = expandedToolText(entry)
+      if (text === null) return
+      process.stdout.write(`\n${color(90, `-- expand [${entry.seq}] --`)}\n${text}`)
+      paintStatus()
     }
 
     const shutdown = (): void => {
@@ -134,6 +183,16 @@ export function runPlayer(engine: ReplayEngine): Promise<void> {
         case 'right':
         case ']':
           seekAdjacentTurn(1)
+          return
+        case 'up':
+          moveSelection(-1)
+          return
+        case 'down':
+          moveSelection(1)
+          return
+        case 'return':
+        case 'e':
+          expandSelection()
           return
         case '1':
           engine.setSpeed(1)

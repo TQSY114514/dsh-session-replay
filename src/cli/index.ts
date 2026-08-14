@@ -22,17 +22,21 @@ function defaultStoreRoot(): string {
 const USAGE = `dsh-replay — Agent Run Replay for DeepSeek Harness
 
 Usage:
-  dsh-replay list [--store <dir>]                  list recorded sessions
-  dsh-replay <session-id> [--store <dir>] [--speed 1|2|4|8] [--headless]
-                                                   replay one session
+  dsh-replay list [--store <dir>] [--compression zstd|none]
+                                                  list recorded sessions
+  dsh-replay <session-id> [--store <dir>] [--compression zstd|none]
+                  [--speed 1|2|4|8] [--headless]  replay one session
 
-The store defaults to ~/.dsh/sessions (overridable with --store).
+The store defaults to ~/.dsh/sessions (overridable with --store); the
+physical encoding defaults to zstd (--compression none for plain .jsonl).
 Keys while replaying: space play/pause, s step, [ ] prev/next turn,
-1/2/4/8 speed, q quit. --headless dumps the whole timeline and exits.`
+up/down select tool, enter expand, 1/2/4/8 speed, q quit.
+--headless dumps the whole timeline and exits.`
 
 interface CliOptions {
   readonly store: string
   readonly speed: Speed | undefined
+  readonly compression: 'zstd' | 'none'
   readonly headless: boolean
 }
 
@@ -40,6 +44,7 @@ function parseOptions(argv: readonly string[]): { positional: string[]; options:
   const positional: string[] = []
   let store = defaultStoreRoot()
   let speed: Speed | undefined
+  let compression: 'zstd' | 'none' = 'zstd'
   let headless = false
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
@@ -52,6 +57,14 @@ function parseOptions(argv: readonly string[]): { positional: string[]; options:
         process.exit(2)
       }
       store = value
+    } else if (arg === '--compression') {
+      i += 1
+      const value = argv[i]
+      if (value !== 'zstd' && value !== 'none') {
+        process.stderr.write('--compression must be zstd or none\n')
+        process.exit(2)
+      }
+      compression = value
     } else if (arg === '--speed') {
       i += 1
       const raw = argv[i]
@@ -74,18 +87,18 @@ function parseOptions(argv: readonly string[]): { positional: string[]; options:
       positional.push(arg)
     }
   }
-  return { positional, options: { store, speed, headless } }
+  return { positional, options: { store, speed, compression, headless } }
 }
 
-function openPersistence(store: string): JsonlSessionPersistence {
+function openPersistence(store: string, compression: 'zstd' | 'none'): JsonlSessionPersistence {
   const ctx = new Context()
   // The JSONL coordinator requires the sessions service for its write path.
   new SessionStore(ctx)
-  return new JsonlSessionPersistence(ctx, { root: store })
+  return new JsonlSessionPersistence(ctx, { root: store, compression })
 }
 
-async function listSessions(store: string): Promise<void> {
-  const persistence = openPersistence(store)
+async function listSessions(store: string, compression: 'zstd' | 'none'): Promise<void> {
+  const persistence = openPersistence(store, compression)
   const headers = await persistence.list()
   if (headers.length === 0) {
     process.stdout.write(`no sessions recorded under ${store}\n`)
@@ -99,8 +112,8 @@ async function listSessions(store: string): Promise<void> {
   }
 }
 
-async function replay(idText: string, store: string, speed: Speed | undefined): Promise<void> {
-  const persistence = openPersistence(store)
+async function replay(idText: string, store: string, compression: 'zstd' | 'none', speed: Speed | undefined): Promise<void> {
+  const persistence = openPersistence(store, compression)
   const id = SessionId(idText)
   const run = await loadRun(persistence, id)
   const engine = new ReplayEngine(run.events)
@@ -110,8 +123,8 @@ async function replay(idText: string, store: string, speed: Speed | undefined): 
 }
 
 /** Non-interactive dump: step through the whole run and print every rendered row. */
-async function replayHeadless(idText: string, store: string): Promise<void> {
-  const persistence = openPersistence(store)
+async function replayHeadless(idText: string, store: string, compression: 'zstd' | 'none'): Promise<void> {
+  const persistence = openPersistence(store, compression)
   const id = SessionId(idText)
   const run = await loadRun(persistence, id)
   const engine = new ReplayEngine(run.events)
@@ -129,15 +142,15 @@ async function main(): Promise<void> {
   }
   try {
     if (positional[0] === 'list') {
-      await listSessions(options.store)
+      await listSessions(options.store, options.compression)
     } else {
       const id = positional[0]
       if (id === undefined) {
         process.stdout.write(`${USAGE}\n`)
         return
       }
-      if (options.headless) await replayHeadless(id, options.store)
-      else await replay(id, options.store, options.speed)
+      if (options.headless) await replayHeadless(id, options.store, options.compression)
+      else await replay(id, options.store, options.compression, options.speed)
     }
   } catch (error) {
     process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`)
