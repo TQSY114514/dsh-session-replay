@@ -6,6 +6,7 @@ import { ReplayEngine } from './engine/index.ts'
 import { loadRun } from './store/reader.ts'
 import { renderEntryLine } from './cli/player.ts'
 import { LiveReplay } from './live.ts'
+import { forkRun } from './fork.ts'
 
 /** Cap the command's text payload so a giant session cannot flood the UI. */
 const MAX_OUTPUT_CHARS = 6000
@@ -50,13 +51,37 @@ export const inject = ['commands', 'sessions', 'sessionPersistence']
 export function apply(ctx: Context): void {
   ctx.commands.register({
     name: 'replay',
-    description: 'Replay a recorded agent run as a text timeline; append --follow to keep streaming live events',
-    input: { hint: '[session-id] [--follow]' },
+    description: 'Replay a recorded agent run as text; --follow streams live events, --fork [--at <seq>] forks a child session at a boundary',
+    input: { hint: '[session-id] [--follow|--fork [--at <seq>]]' },
     handler: async ({ agent, rawInput }: CommandInvocation): Promise<CommandResult> => {
       const parts = rawInput.trim().split(/\s+/).filter(part => part.length > 0)
       const follow = parts.includes('--follow')
-      const idText = parts.find(part => part !== '--follow')
+      const fork = parts.includes('--fork')
+      const atIndex = parts.indexOf('--at')
+      const atRaw = atIndex >= 0 ? parts[atIndex + 1] : undefined
+      const at = atRaw === undefined ? undefined : Number(atRaw)
+      const idText = parts.find(part =>
+        part !== '--follow' && part !== '--fork' && part !== '--at' && part !== atRaw)
       const targetId = idText === undefined ? agent.session.id : SessionId(idText)
+
+      if (fork) {
+        try {
+          const result = await forkRun(ctx, targetId, {
+            ...(at !== undefined && Number.isSafeInteger(at) && at >= 0 ? { boundary: at } : {}),
+          })
+          return {
+            kind: 'success',
+            text: `forked ${targetId} @ seq ${result.boundary} -> ${result.child.id}\n`
+              + `seed: ${result.child.header.seedLength ?? 0} events (cut ${result.cut.length})\n`
+              + 'resume the child session to re-run from this point',
+          }
+        } catch (error) {
+          return {
+            kind: 'error',
+            text: error instanceof Error ? error.message : String(error),
+          }
+        }
+      }
       return runReplayCommand(ctx, targetId, follow)
     },
   })

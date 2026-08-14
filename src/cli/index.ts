@@ -10,6 +10,7 @@ import { loadRun } from '../store/reader.ts'
 import type { LoadedRun } from '../store/reader.ts'
 import { diffRuns, fingerprintEvents, renderDiff } from '../diff.ts'
 import type { Fingerprint, RunStats } from '../diff.ts'
+import { forkRun } from '../fork.ts'
 import type { Speed } from '../types.ts'
 import { noopRenderDeps, renderEvent } from '../engine/render.ts'
 import { runPlayer } from './player.ts'
@@ -32,6 +33,9 @@ Usage:
                   [--speed 1|2|4|8] [--headless]  replay one session
   dsh-replay diff <id-a> <id-b> [--store <dir>] [--compression zstd|none]
                                                   align and compare two runs
+  dsh-replay fork <source-id> [--at <seq>] [--turn <n>] [--child <id>]
+                  [--store <dir>] [--compression zstd|none]
+                                                  fork the run at a boundary
 
 The store defaults to ~/.dsh/sessions (overridable with --store); the
 physical encoding defaults to zstd (--compression none for plain .jsonl).
@@ -44,6 +48,9 @@ interface CliOptions {
   readonly speed: Speed | undefined
   readonly compression: 'zstd' | 'none'
   readonly headless: boolean
+  readonly at: number | undefined
+  readonly turn: number | undefined
+  readonly child: string | undefined
 }
 
 function parseOptions(argv: readonly string[]): { positional: string[]; options: CliOptions } {
@@ -52,6 +59,9 @@ function parseOptions(argv: readonly string[]): { positional: string[]; options:
   let speed: Speed | undefined
   let compression: 'zstd' | 'none' = 'zstd'
   let headless = false
+  let at: number | undefined
+  let turn: number | undefined
+  let child: string | undefined
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (arg === undefined) continue
@@ -63,6 +73,30 @@ function parseOptions(argv: readonly string[]): { positional: string[]; options:
         process.exit(2)
       }
       store = value
+    } else if (arg === '--at') {
+      i += 1
+      const value = Number(argv[i])
+      if (!Number.isSafeInteger(value) || value < 0) {
+        process.stderr.write('--at requires a non-negative integer seq\n')
+        process.exit(2)
+      }
+      at = value
+    } else if (arg === '--turn') {
+      i += 1
+      const value = Number(argv[i])
+      if (!Number.isInteger(value) || value < 1) {
+        process.stderr.write('--turn requires a positive integer turn number\n')
+        process.exit(2)
+      }
+      turn = value
+    } else if (arg === '--child') {
+      i += 1
+      const value = argv[i]
+      if (value === undefined) {
+        process.stderr.write('--child requires an id\n')
+        process.exit(2)
+      }
+      child = value
     } else if (arg === '--compression') {
       i += 1
       const value = argv[i]
@@ -93,7 +127,7 @@ function parseOptions(argv: readonly string[]): { positional: string[]; options:
       positional.push(arg)
     }
   }
-  return { positional, options: { store, speed, compression, headless } }
+  return { positional, options: { store, speed, compression, headless, at, turn, child } }
 }
 
 function openPersistence(store: string, compression: 'zstd' | 'none'): JsonlSessionPersistence {
@@ -144,6 +178,30 @@ function statsLine(id: string, stats: RunStats): string {
   return `${id}: ${stats.turnCount} turns, ${stats.toolCallCount} tools, ${stats.failureCount} failures, ${stats.durationMs}ms`
 }
 
+/** Fork a recorded run at a boundary and print the child session identity. */
+async function forkSession(
+  sourceIdText: string,
+  at: number | undefined,
+  turn: number | undefined,
+  childIdText: string | undefined,
+  store: string,
+  compression: 'zstd' | 'none',
+): Promise<void> {
+  const ctx = new Context()
+  new SessionStore(ctx)
+  new JsonlSessionPersistence(ctx, { root: store, compression })
+  // Forking needs a live source; forkRun rebuilds it from persistence.
+  const result = await forkRun(ctx, SessionId(sourceIdText), {
+    ...(at !== undefined ? { boundary: at } : {}),
+    ...(turn !== undefined ? { turn } : {}),
+    ...(childIdText !== undefined ? { childId: SessionId(childIdText) } : {}),
+  })
+  process.stdout.write(`forked ${sourceIdText} @ seq ${result.boundary} -> ${result.child.id}\n`)
+  process.stdout.write(`  child cwd: ${result.child.header.cwd ?? '-'}\n`)
+  process.stdout.write(`  seed length: ${result.child.header.seedLength ?? 0} events (cut ${result.cut.length})\n`)
+  process.stdout.write('  continue it in the harness (resume the child session) to re-run from this point\n')
+}
+
 /** Align two recorded runs and print the side-by-side diff plus metrics. */
 async function diffSessions(
   idAText: string,
@@ -184,6 +242,13 @@ async function main(): Promise<void> {
     const command = positional[0]
     if (command === 'list') {
       await listSessions(options.store, options.compression)
+    } else if (command === 'fork') {
+      const sourceId = positional[1]
+      if (sourceId === undefined) {
+        process.stdout.write(`${USAGE}\n`)
+        return
+      }
+      await forkSession(sourceId, options.at, options.turn, options.child, options.store, options.compression)
     } else if (command === 'diff') {
       const idA = positional[1]
       const idB = positional[2]

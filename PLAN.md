@@ -535,3 +535,30 @@ conversation.view 新 tab(id 'replay', order 20):播放/暂停/单步/倍速 1·
 - [x] M4 完成
 - [ ] 浏览器真机验证(visual-qa / playwright):起 web bundle 录真实会话 → Replay tab 截图走查
 - [ ] M6:fork 断点重跑
+
+## 18. M6 执行记录(2026-08-14):fork 断点重跑
+
+### 已实现(57 个测试全绿 + `tsc -b` 干净)
+
+- **`src/fork.ts` `forkRun(ctx, sourceId, { boundary | turn, childId? })`**:把一次 run 在边界处切成 child session——boundary 前缀成为 child 的 seed(带 `parentSession`/`seedLength` lineage 元数据),尾部作为 `cut` 返回,child 直接 live 在 store 中,resume 它即可从失败点换提示词/换模型重跑。
+- **持久化 source 恢复**:`create` 会与持久化 identity 冲突("persisted state already owns this identity"),正确路径是 `ctx.sessionPersistence.prepare()` + `ctx.sessions.enter/announce`。
+- **`session/end-seed` 投影标记**:恢复构造的 Session 会投影该标记事件,污染默认 boundary 和 cut——已排除。
+- **CLI**:`dsh-replay fork <source-id> [--at <seq>] [--turn <n>] [--child <id>]`,真实运行验证通过:
+  ```
+  forked deploy-failed-run @ seq 3 -> retry-run
+    seed: 4 events (cut 4)
+  ```
+- **plugin**:`/replay <id> --fork [--at <seq>]`(handler 内 fork 并返回 child 信息)。
+- **测试**:默认 tail 分叉、显式 seq、按 turn、未知 turn 报错、open-turn 拒绝、live source 复用——6 个场景,全部真实 JSONL 后端。
+
+### 关键 API 事实(写代码时确认)
+
+- `SessionStore.fork(source, boundary?, childId?)`:boundary 校验(非负安全整数、contiguous seq、前缀必须结束在完成回合外——OPEN_TURN 拒绝);child 默认 id 是 store 策略 `session-N`。
+- `prepare(id)` 返回 `SessionPreparation`(未发布 Session + release 回调),发布用 enter/announce,dispose 后 release 变 no-op。
+- **遗留**:真正"重跑"需要 live harness + API key(resume child 挂 agent 调模型),本包只负责创建 child——这是 read-only 包的自然边界。
+
+### 剩余事项
+
+- [x] M6 完成(创建 child 部分)
+- [ ] 端到端重跑验证(需要 DEEPSEEK_API_KEY:resume child → 新 agent 继续 → diff 两次 run)
+- [ ] 浏览器真机验证(visual-qa / playwright)

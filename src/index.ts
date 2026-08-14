@@ -21,4 +21,6 @@ export {
 } from './diff.ts'
 export type { DiffOp, Fingerprint, RunDiff, RunStats } from './diff.ts'
 export { LiveReplay } from './live.ts'
+export { forkRun } from './fork.ts'
+export type { ForkOptions, ForkResult } from './fork.ts'
 export { name, apply } from './plugin.ts'
