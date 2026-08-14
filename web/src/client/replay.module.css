@@ -1,0 +1,331 @@
+/* Replay player: a transport strip over a virtualized event timeline. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+/* ── transport strip ────────────────────────────────────────────────────── */
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.button {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.button:active:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-active);
+}
+
+.button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.buttonActive {
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.speedGroup {
+  display: flex;
+  gap: 2px;
+}
+
+.progress {
+  flex: 1;
+  min-width: 120px;
+  height: 18px;
+  accent-color: var(--dsw-alias-state-business-primary);
+}
+
+.position {
+  font-family: var(--ds-font-family-code);
+  font-size: 11px;
+  color: var(--dsw-alias-label-caption);
+  min-width: 84px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.percent {
+  font-family: var(--ds-font-family-code);
+  font-size: 11px;
+  color: var(--dsw-alias-label-caption);
+  min-width: 44px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.live {
+  flex: none;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--dsw-alias-state-success-primary);
+  border: 1px solid var(--dsw-alias-state-success-primary);
+  border-radius: 4px;
+  padding: 1px 6px;
+  letter-spacing: 0.05em;
+}
+
+.olderRow {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  padding: 6px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* ── timeline ───────────────────────────────────────────────────────────── */
+
+.timeline {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+}
+
+.virtualSpace {
+  position: relative;
+  width: 100%;
+}
+
+.virtualRow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  font-size: 12.5px;
+  line-height: 1.55;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.gutter {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  width: 150px;
+  padding: 3px 10px;
+  box-sizing: border-box;
+  border-right: 1px solid var(--dsw-alias-border-l1);
+  font-family: var(--ds-font-family-code);
+  font-size: 11px;
+  color: var(--dsw-alias-label-caption);
+}
+
+.seq {
+  min-width: 42px;
+  text-align: right;
+}
+
+.time {
+  white-space: nowrap;
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 10px;
+}
+
+/* Kind accents: user/success green, tool/business blue, error red, dim gray. */
+
+.rowUser {
+  border-left: 2px solid var(--dsw-alias-state-success-primary);
+}
+
+.rowAssistant {
+  border-left: 2px solid var(--dsw-alias-label-dimmed);
+}
+
+.rowToolCall {
+  border-left: 2px solid var(--dsw-alias-state-business-primary);
+}
+
+.rowToolResult {
+  border-left: 2px solid var(--dsw-alias-state-success-primary);
+}
+
+.rowToolError {
+  border-left: 2px solid var(--dsw-alias-state-error-primary);
+}
+
+.rowStep,
+.rowTodo,
+.rowRequest {
+  border-left: 2px solid var(--dsw-alias-border-l2);
+}
+
+.rowBand {
+  background: var(--dsw-alias-state-warn-tertiary);
+  border-left: 2px solid var(--dsw-alias-state-warn-primary);
+}
+
+.rowBandEnd {
+  background: var(--dsw-alias-bg-skeleton);
+  border-left: 2px solid var(--dsw-alias-state-warn-primary);
+}
+
+.bandTitle {
+  font-weight: 600;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.bandDetail {
+  margin-left: 8px;
+  color: var(--dsw-alias-state-warn-label);
+  opacity: 0.75;
+}
+
+.role {
+  margin-right: 6px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--dsw-alias-label-caption);
+}
+
+.rowText {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.toolArrow {
+  margin: 0 6px;
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.toolName {
+  font-family: var(--ds-font-family-code);
+  color: var(--dsw-alias-label-primary);
+}
+
+.toolArgs {
+  color: var(--dsw-alias-label-caption);
+}
+
+.resultOk {
+  margin: 0 6px;
+  font-family: var(--ds-font-family-code);
+  font-size: 11px;
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.resultError {
+  margin: 0 6px;
+  font-family: var(--ds-font-family-code);
+  font-size: 11px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.resultPreview {
+  color: var(--dsw-alias-label-caption);
+}
+
+.chips {
+  margin-left: 8px;
+  font-family: var(--ds-font-family-code);
+  font-size: 11px;
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.expandButton {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.expandMark {
+  flex: none;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--dsw-alias-label-caption);
+}
+
+.expanded {
+  margin: 6px 0 2px 18px;
+  padding: 8px 10px;
+  background: var(--dsw-alias-bg-skeleton);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 4px;
+  font-family: var(--ds-font-family-code);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  max-height: 480px;
+}
+
+/* ── states ─────────────────────────────────────────────────────────────── */
+
+.statePanel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--dsw-alias-label-caption);
+}
+
+.stateTitle {
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.stateDetail {
+  font-family: var(--ds-font-family-code);
+  font-size: 11.5px;
+}
+
+.finishedStrip {
+  flex: none;
+  padding: 4px 10px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--dsw-alias-label-caption);
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}

@@ -503,3 +503,35 @@ run-a:grep → read_file → bash(一次成功);run-b:grep → bash(失败)→ r
 - [x] M3 完成
 - [ ] M4:Web ReplayPanel(已委托 visual-engineering,后台进行中)
 - [ ] M6:fork 断点重跑
+
+## 17. M4 执行记录(2026-08-14):Web ReplayPanel
+
+### 交付:packages/client/ui-replay(@deepseek-ai/dsh-client-ui-replay,19 文件)
+
+四道验证全过:standalone tsc 零错误、client aggregate 全量 typecheck 零错误、20/20 vitest、tsdown bundle 构建成功(99.6 kB / gzip 24.3 kB,ReplayEngine 内联,无 node: 泄漏)。三处注册(tsconfig.client.json / web-app cordis.patch.yml / web-app package.json)齐备。复用 session-replay 的 ReplayEngine/renderEvent,未改其一行。
+
+### 数据通路(浏览器端零新 RPC、零 runtime 改动)
+
+每个原始 SessionEvent 经注册的 ConversationNodeDefinition(kind 'replay.event',match 全收,state=事件本身,每事件一个 Context)→ ReplaySnapshotBuilder(target 'replay',seq-keyed Map,尾增 O(1)/乱序全量重建,每次 flush 返回新快照对象保 uSES 引用纪律)→ views.get('replay') → ReplayView 的 useSession selector。引擎同步:useLayoutEffect 二分找 delta 后 engine.append(delta);头部变化(loadOlder)重建引擎并按 seq 恢复位置。
+
+### UI
+
+conversation.view 新 tab(id 'replay', order 20):播放/暂停/单步/倍速 1·2·4·8/上一·下一回合/进度条(scrub+seek);tool call 行点击展开完整 args/result;@tanstack/react-virtual 虚拟化(动态测量);loading/error/empty 三态;zh+en i18n(含 aria);CSS 全 token 驱动(--dsw-alias-*),无渐变/毛玻璃/大圆角。
+
+### 关键工程发现(两个坑,已绕开 + 值得上游关注)
+
+1. **session-replay 的 d.ts 从 @deepseek-ai/dsh-session root 导入类型** → root 的 ctx.sessions: SessionStore merge 污染 client 程序。解法:tsconfig paths 把 dsh-session 重映射到 /types face + 不把 session-replay 作为 composite reference。**建议上游**:引擎类型导入改 /types。
+2. **ConversationViewSnapshotMap 加第 3 个成员会让 ui-trajectory 的 views.get stub 测试崩溃**。解法:merge 放独立 ambient d.ts,不进 aggregate 的 d.ts 链。
+
+### 遗留问题
+
+- loadOlder 会重建引擎(engine 无 prepend),位置按 seq 恢复但暂停
+- 实时跟进停在观察端:append 不自动推进 cursor(engine 语义,与 CLI 一致)
+- 每事件一个 Context 的线性簿记:数万事件无压力,百万级需改为按回合折叠
+- 浏览器真机截图验证未做(需要跑起 web bundle + 真实会话),列为待办
+
+### 剩余事项
+
+- [x] M4 完成
+- [ ] 浏览器真机验证(visual-qa / playwright):起 web bundle 录真实会话 → Replay tab 截图走查
+- [ ] M6:fork 断点重跑

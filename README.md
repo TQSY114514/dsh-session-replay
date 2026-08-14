@@ -44,14 +44,23 @@ src/
 tests/       engine/render/fold unit tests + JSONL end-to-end integration test
 ```
 
+## Web 播放器(`web/`)
+
+`web/` 目录是独立的 client 包 `@deepseek-ai/dsh-client-ui-replay` 的存档(官方 repo 中位于 `packages/client/ui-replay/`):在 Web Client 的 `conversation.view` 加一个 **Replay** tab,渲染可交互回放面板。
+
+- **数据通路**:浏览器端零新 RPC——注册的 `ConversationNodeDefinition` 捕获会话窗口的每个原始事件 → `ReplaySnapshotBuilder` 聚合为按 seq 排序的 `SessionEvent[]` → 视图 selector 读取 → `ReplayEngine` 驱动
+- **UI**:播放/暂停/单步/倍速(1/2/4/8)/上一·下一回合/进度条(seek),tool call 行可展开,长会话虚拟化,loading/error/empty 三态,zh+en i18n
+- **实时跟进**:新事件自动 append 进引擎,播放状态持续
+- 注意:`web/` 依赖官方 monorepo 的 client 包(`dsh-client-runtime` 等)与 workspace 链接,独立于本仓库构建——正式消费需等待官方发版或并入官方 repo
+
 ## Roadmap
 
 | Milestone | Scope |
 |---|---|
 | M1 ✅ | StoreReader + ReplayEngine + render + CLI list/headless |
 | M2 ✅ | interactive polish: tool-call select/expand (up/down + enter), error/interrupt rendering, `--compression` |
-| M3 | `/replay` harness command + live follow-along (`session/event`) |
-| M4 | Web ReplayPanel |
+| M3 ✅ | `/replay` harness command + live follow-along (`session/event`) |
+| M4 ✅ | Web ReplayPanel (`conversation.view` tab, `web/`) |
 | M5 ✅ | two-run diff (LCS alignment + side-by-side view + metrics) |
 | M6 | fork-and-rerun from a step (needs live harness + API key) |
 
