@@ -20,3 +20,5 @@ export {
   alignRuns, computeStats, diffRuns, fingerprintEvents, lcsPairs, renderDiff,
 } from './diff.ts'
 export type { DiffOp, Fingerprint, RunDiff, RunStats } from './diff.ts'
+export { LiveReplay } from './live.ts'
+export { name, apply } from './plugin.ts'

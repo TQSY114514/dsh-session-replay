@@ -18,7 +18,12 @@ import type { RenderDeps } from './render.ts'
  * to back.
  */
 export class ReplayEngine {
-  readonly events: readonly SessionEvent[]
+  private readonly eventsArray: SessionEvent[] = []
+
+  /** The ordered event log, in seq order. Read-only view of the internal buffer. */
+  get events(): readonly SessionEvent[] {
+    return this.eventsArray
+  }
 
   private cursor = 0
   private playing = false
@@ -26,6 +31,7 @@ export class ReplayEngine {
   private accumulated = 0
   private lastTickAt: number | null = null
   private ended = false
+  private lastSeq = -1
 
   private readonly toolNames = new Map<string, string>()
   private readonly turnIndex = new Map<number, number>()
@@ -37,14 +43,39 @@ export class ReplayEngine {
   onEnd: (() => void) | null = null
 
   constructor(events: readonly SessionEvent[]) {
-    this.events = [...events].sort((a, b) => a.seq - b.seq)
-    this.buildIndexes()
+    this.eventsArray.push(...[...events].sort((a, b) => a.seq - b.seq))
+    this.lastSeq = this.eventsArray.length > 0
+      ? (this.eventsArray[this.eventsArray.length - 1]?.seq ?? -1)
+      : -1
+    this.buildIndexes(0)
   }
 
-  /** Index turn/step start positions for O(1) seek targets. */
-  private buildIndexes(): void {
-    for (let i = 0; i < this.events.length; i += 1) {
-      const event = this.events[i]
+  /**
+   * Append newly recorded events to the log, for live follow-along. Events
+   * whose `seq` is not greater than the current tail are dropped (a cold start
+   * re-feeds history the firehose then repeats). Indexes are extended only
+   * over the appended region, so appending stays O(added).
+   */
+  append(newEvents: readonly SessionEvent[]): void {
+    const startIndex = this.eventsArray.length
+    let added = 0
+    for (const event of newEvents) {
+      if (event.seq > this.lastSeq) {
+        this.eventsArray.push(event)
+        this.lastSeq = event.seq
+        added += 1
+      }
+    }
+    if (added > 0) {
+      this.buildIndexes(startIndex)
+      this.ended = false
+    }
+  }
+
+  /** Index turn/step start positions for O(1) seek targets, over `[from, len)`. */
+  private buildIndexes(from: number): void {
+    for (let i = from; i < this.eventsArray.length; i += 1) {
+      const event = this.eventsArray[i]
       if (event === undefined) break
       if (event.type === 'turn/start') this.turnIndex.set(event.data.turn, i)
       else if (event.type === 'step/start') this.stepIndex.set(`${event.data.turn}:${event.data.step}`, i)

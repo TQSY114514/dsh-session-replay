@@ -481,3 +481,25 @@ run-a:grep → read_file → bash(一次成功);run-b:grep → bash(失败)→ r
 - [ ] M3:`/replay` 命令 + 实时边跑边看(`session/event`)
 - [ ] M4:Web ReplayPanel
 - [ ] M6:fork 断点重跑
+
+## 16. M3 执行记录(2026-08-14):harness 命令 + 实时跟进
+
+### 已实现(51 个测试全绿 + `tsc -b` 干净)
+
+- **`ReplayEngine.append(events)`**:增量合并新事件(seq 去重,冷启动重喂历史无害)+ 增量 index 更新(O(added));append 后重置 atEnd。toolNames 跨 append 边界解析正常。
+- **`src/live.ts` LiveReplay**:冷启动喂初始事件 + `ctx.on('session/event')` firehose 增量 append,按 session.id 过滤,listener 内 contain 异常(防饿死其他订阅者——firehose 是 stop-on-throw)。
+- **`src/plugin.ts` 函数插件**:`inject = ['commands', 'sessions', 'sessionPersistence']`;注册 `/replay [session-id] [--follow]`;handler 返回 headless 渲染文本(6k 字符截断),`--follow` 额外启动 LiveReplay(ctx.effect 管理生命周期)。纯核心 `runReplayCommand(ctx, id, follow)` 已提取,用真实 JSONL 后端单测。
+
+### 调研确认的关键事实
+
+- **CommandDefinition**:`{ name, description, input?, recordInput?, handler(invocation) }`;handler 返回 `CommandResult`(`{kind:'success', text?}` | `{kind:'error', text}`),text 由 UI adapter 直接渲染、**永不进入模型历史**;命令只在 UI 命令平面执行,agent 不能调用。
+- **`ctx.commands` 类型**:声明在 `@deepseek-ai/dsh-commands`(interaction/commands);`ctx.sessionPersistence` 在 `@deepseek-ai/dsh-session-persistence`。函数插件 `inject` 数组 + 类型 import 激活。
+- **`session/event` 监听器**:`(session: Session, event: SessionEvent)`,session 是完整对象;scope 过滤按 agent 而非 session id,过滤特定 session 用 `if (session.id !== target) return`。
+- **增量模式参考**:telemetry coordinator(adopt 历史 + firehose 追实时 + handoffCursor)、projection registry(drive() 逐事件 apply)。
+- **测试教训**:命令输出带 ANSI 颜色码,断言要分段匹配;folded 反映播放光标而非日志尾部,断言前先 drain。
+
+### 剩余事项
+
+- [x] M3 完成
+- [ ] M4:Web ReplayPanel(已委托 visual-engineering,后台进行中)
+- [ ] M6:fork 断点重跑
