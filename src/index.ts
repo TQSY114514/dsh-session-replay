@@ -16,3 +16,7 @@ export { noopRenderDeps, renderEvent, textOf } from './engine/render.ts'
 export type { RenderDeps } from './engine/render.ts'
 export { loadRun, rebuildSession } from './store/reader.ts'
 export type { LoadedRun } from './store/reader.ts'
+export {
+  alignRuns, computeStats, diffRuns, fingerprintEvents, lcsPairs, renderDiff,
+} from './diff.ts'
+export type { DiffOp, Fingerprint, RunDiff, RunStats } from './diff.ts'

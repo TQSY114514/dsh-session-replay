@@ -435,3 +435,49 @@ packages/session/session-replay/
 
 - `LlmFailure`: `{ message, code, status?, providerRetryAfterMs?, requestId? }` — turn-end error 取 `message (code)`。
 - `AgentCancelCause`: `user | parent | hook(reason) | disposed`,加 `legacy` 导入值。
+
+## 15. M5 执行记录(2026-08-14):双 Run diff
+
+### 已实现(41 个测试全绿 + `tsc -b` 干净)
+
+- **`src/diff.ts`(纯 TS)**:
+  - `fingerprintEvents()`:日志 → 对齐指纹序列(`user` / `assistant` / `tool:<name>` / `result:<name>`),tool-result 从前面 tool/call 解析名字;turn/step/todo 等边界不进指纹(LCS 噪音)
+  - `lcsPairs()` + `alignRuns()`:经典 O(n·m) LCS,输出 `equal` / `only-a` / `only-b` op 流
+  - `computeStats()`:turn 数 / tool 数 / 失败数 / 时长
+  - `renderDiff(ops, a, b, aText, bText)`:并排文本(匹配行同文本只打一行,不同打两列;`<` 只在 A,`>` 只在 B)
+- **CLI**:`dsh-replay diff <id-a> <id-b>` — 指标头 + 并排 diff
+- **测试**:指纹/LCS/渲染/指标 4 组 + 专项回归测试(见下)
+
+### 真实运行验证(同任务、不同过程的两个 session)
+
+run-a:grep → read_file → bash(一次成功);run-b:grep → bash(失败)→ read_file → bash(重试成功)
+
+```
+# diff run-a vs run-b
+  run-a: 1 turns, 3 tools, 0 failures, 14500ms
+  run-b: 1 turns, 4 tools, 1 failures, 18600ms
+
+  [1] user: 修复这个 bug
+  [2] assistant: 先定位问题。
+  [3] -> grep(...)
+  [4] call:c1 ok: ...
+> [5] -> bash(...)                         ← 只在 B:失败的第一次尝试
+> [6] call:c2 ERROR (BashError: E_EXEC)    ← 只在 B
+> [7] assistant: patch 没匹配...           ← 只在 B
+  [5] -> read_file  |  [8] -> read_file    ← 匹配,两侧各自渲染
+  [6] call:c2 ok  |  [9] call:c3 ok        ← 匹配
+< [7] assistant: 找到了,加空值保护。        ← 只在 A
+  [8] -> bash  |  [10] -> bash             ← 匹配
+  [9] call:c3 ok  |  [11] call:c4 ok       ← 匹配
+  [10] assistant: 修复完成。 |  [12] ...    ← 匹配
+```
+
+### 真实运行中抓到的 bug
+
+**`renderDiff` 只有一个 `textFor`**:CLI 把 runA 的渲染器同时用于 B 侧,导致 B 的指纹按 runA 的 seq 查事件——出现 `[5] read_file | [8] bash` 这种两边 label 都不一致的假 equal 行。修复:签名改为 `(ops, a, b, aText, bText)`,每侧用自己的日志渲染,并补了专项回归测试("renders each side from its own text function")。教训:单测里两边共用同一个 label 函数掩盖了这个问题,真实 fixture 才是唯一可靠的验证。
+
+### 剩余事项
+
+- [ ] M3:`/replay` 命令 + 实时边跑边看(`session/event`)
+- [ ] M4:Web ReplayPanel
+- [ ] M6:fork 断点重跑

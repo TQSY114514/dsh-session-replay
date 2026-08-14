@@ -25,12 +25,14 @@ Engine, renderer, store reader, and CLI are implemented and green (28 vitest tes
 ```
 dsh-replay list [--store <dir>] [--compression zstd|none]
 dsh-replay <session-id> [--store <dir>] [--compression zstd|none] [--speed 1|2|4|8] [--headless]
+dsh-replay diff <id-a> <id-b> [--store <dir>] [--compression zstd|none]
 ```
 
 - Store defaults to `~/.dsh/sessions` (`$DSH_HOME` overrides it); physical encoding defaults to `zstd` (`--compression none` for plain `.jsonl`).
 - Interactive keys: `space` play/pause, `s` step, `[`/`]` prev/next turn, `up`/`down` select a tool row, `enter` expand the full args/result, `1/2/4/8` speed, `q` quit.
 - `--headless` dumps the whole timeline and exits (useful for diffing/debugging).
 - Error states render in red: failed tool results carry the failure identity (`ERROR (Name: CODE)`), and aborted/error turn endings show the cancel cause or failure message.
+- `diff` aligns two runs with an LCS over fingerprint labels and prints a side-by-side view: `<` appears only in run A, `>` only in run B, matching rows show both columns when their text differs. A metrics header compares turns, tool calls, failures, and duration.
 
 ## Layout
 
@@ -50,7 +52,7 @@ tests/       engine/render/fold unit tests + JSONL end-to-end integration test
 | M2 ✅ | interactive polish: tool-call select/expand (up/down + enter), error/interrupt rendering, `--compression` |
 | M3 | `/replay` harness command + live follow-along (`session/event`) |
 | M4 | Web ReplayPanel |
-| M5 | two-run diff |
+| M5 ✅ | two-run diff (LCS alignment + side-by-side view + metrics) |
 | M6 | fork-and-rerun from a step (needs live harness + API key) |
 
 ## License

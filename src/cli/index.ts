@@ -7,7 +7,11 @@ import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { ReplayEngine } from '../engine/index.ts'
 import { renderEntryLine } from './player.ts'
 import { loadRun } from '../store/reader.ts'
+import type { LoadedRun } from '../store/reader.ts'
+import { diffRuns, fingerprintEvents, renderDiff } from '../diff.ts'
+import type { Fingerprint, RunStats } from '../diff.ts'
 import type { Speed } from '../types.ts'
+import { noopRenderDeps, renderEvent } from '../engine/render.ts'
 import { runPlayer } from './player.ts'
 
 /**
@@ -26,6 +30,8 @@ Usage:
                                                   list recorded sessions
   dsh-replay <session-id> [--store <dir>] [--compression zstd|none]
                   [--speed 1|2|4|8] [--headless]  replay one session
+  dsh-replay diff <id-a> <id-b> [--store <dir>] [--compression zstd|none]
+                                                  align and compare two runs
 
 The store defaults to ~/.dsh/sessions (overridable with --store); the
 physical encoding defaults to zstd (--compression none for plain .jsonl).
@@ -134,6 +140,40 @@ async function replayHeadless(idText: string, store: string, compression: 'zstd'
   process.stdout.write(`# done — ${run.events.length} events\n`)
 }
 
+function statsLine(id: string, stats: RunStats): string {
+  return `${id}: ${stats.turnCount} turns, ${stats.toolCallCount} tools, ${stats.failureCount} failures, ${stats.durationMs}ms`
+}
+
+/** Align two recorded runs and print the side-by-side diff plus metrics. */
+async function diffSessions(
+  idAText: string,
+  idBText: string,
+  store: string,
+  compression: 'zstd' | 'none',
+): Promise<void> {
+  const persistence = openPersistence(store, compression)
+  const runA = await loadRun(persistence, SessionId(idAText))
+  const runB = await loadRun(persistence, SessionId(idBText))
+  const diff = diffRuns(runA.events, runB.events)
+
+  process.stdout.write(`# diff ${runA.id} vs ${runB.id}\n`)
+  process.stdout.write(`  ${statsLine(String(runA.id), diff.a)}\n`)
+  process.stdout.write(`  ${statsLine(String(runB.id), diff.b)}\n\n`)
+
+  const textFor = (run: LoadedRun) => (fingerprint: Fingerprint): string => {
+    const event = run.events[fingerprint.seq]
+    if (event === undefined) return fingerprint.label
+    const entry = renderEvent(event, noopRenderDeps)
+    return entry === null ? fingerprint.label : renderEntryLine(entry)
+  }
+  const a = fingerprintEvents(runA.events)
+  const b = fingerprintEvents(runB.events)
+  // Each side must render from its own log: seq numbers coincide only by accident.
+  for (const line of renderDiff(diff.ops, a, b, textFor(runA), textFor(runB))) {
+    process.stdout.write(`${line}\n`)
+  }
+}
+
 async function main(): Promise<void> {
   const { positional, options } = parseOptions(process.argv.slice(2))
   if (positional.length === 0) {
@@ -141,8 +181,17 @@ async function main(): Promise<void> {
     return
   }
   try {
-    if (positional[0] === 'list') {
+    const command = positional[0]
+    if (command === 'list') {
       await listSessions(options.store, options.compression)
+    } else if (command === 'diff') {
+      const idA = positional[1]
+      const idB = positional[2]
+      if (idA === undefined || idB === undefined) {
+        process.stdout.write(`${USAGE}\n`)
+        return
+      }
+      await diffSessions(idA, idB, options.store, options.compression)
     } else {
       const id = positional[0]
       if (id === undefined) {
