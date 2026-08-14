@@ -1,0 +1,29 @@
+{
+  "name": "dsh-session-replay",
+  "version": "0.1.0",
+  "description": "Agent Run Replay for DeepSeek Harness: play, pause, step, speed, and seek through any recorded session event log.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "dsh-replay": "./bin/dsh-replay.mjs"
+  },
+  "scripts": {
+    "dev": "tsx src/cli/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-session": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-session-persistence": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "^0.0.1-rc.1",
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
