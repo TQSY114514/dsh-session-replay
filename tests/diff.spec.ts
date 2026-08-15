@@ -4,6 +4,7 @@ import { CallId, MessageId } from '@deepseek-ai/dsh-llm'
 import {
   alignRuns, computeStats, diffRuns, fingerprintEvents, lcsPairs, renderDiff,
 } from '../src/diff.ts'
+import type { Fingerprint } from '../src/diff.ts'
 
 function user(seq: number, time: number, text: string): SessionEvent {
   return {
@@ -108,6 +109,46 @@ describe('lcsPairs and alignRuns', () => {
       { kind: 'equal', aIndex: 1, bIndex: 1 },
       { kind: 'only-b', bIndex: 2 },
     ])
+  })
+
+  it('aligns long same-task runs through the divergent middle only', () => {
+    // Two runs sharing a 20k-row prefix and suffix with a small divergent
+    // middle: the DP never sees the shared regions, so this stays fast and
+    // produces prefix pairs + middle alignment + suffix pairs.
+    const fp = (seq: number, label: string): Fingerprint => ({ seq, label })
+    const prefix = Array.from({ length: 20_000 }, (_, i) => fp(i, 'assistant'))
+    const suffix = Array.from({ length: 20_000 }, (_, i) => fp(30_000 + i, 'user'))
+    const a = [...prefix, fp(20_000, 'tool:grep'), fp(20_001, 'result:grep'), ...suffix]
+    const b = [...prefix, fp(20_000, 'tool:grep'), fp(20_001, 'result:grep'), fp(20_002, 'assistant'), ...suffix]
+    const pairs = lcsPairs(a, b)
+    // All of the prefix and suffix match; only B's extra assistant is unmatched.
+    expect(pairs).toHaveLength(a.length)
+    expect(pairs.at(-1)).toEqual({ aIndex: a.length - 1, bIndex: b.length - 1 })
+    expect(alignRuns(a, b).filter(op => op.kind === 'only-b')).toEqual([{ kind: 'only-b', bIndex: 20_002 }])
+  })
+
+  it('keeps only the trimmed anchors when the middle is too divergent for a table', () => {
+    // 5k × 5k distinct labels exceed the DP cell ceiling: the matcher must
+    // keep the shared head/tail and report the middles as unmatched rather
+    // than allocating a giant table.
+    const fp = (seq: number, label: string): Fingerprint => ({ seq, label })
+    const head = Array.from({ length: 10 }, (_, i) => fp(i, `head:${i}`))
+    const tailA = Array.from({ length: 10 }, (_, i) => fp(6000 + i, `tail:${i}`))
+    const midA = Array.from({ length: 5000 }, (_, i) => fp(10 + i, `a:${i}`))
+    const midB = Array.from({ length: 5000 }, (_, i) => fp(10 + i, `b:${i}`))
+    const a = [...head, ...midA, ...tailA]
+    const b = [...head, ...midB, ...tailA.map((_, i) => fp(6000 + i, `tail:${i}`))]
+    const pairs = lcsPairs(a, b)
+    expect(pairs).toHaveLength(20) // 10 head + 10 tail anchors, middles unmatched
+    expect(pairs[0]).toEqual({ aIndex: 0, bIndex: 0 })
+    expect(pairs.at(-1)).toEqual({ aIndex: a.length - 1, bIndex: b.length - 1 })
+  })
+
+  it('aligns two identical giant sequences fully through trimming alone', () => {
+    const a = Array.from({ length: 30_000 }, (_, i): Fingerprint => ({ seq: i, label: `row:${i % 50}` }))
+    const pairs = lcsPairs(a, a)
+    expect(pairs).toHaveLength(30_000)
+    expect(pairs.every((pair, i) => pair.aIndex === i && pair.bIndex === i)).toBe(true)
   })
 })
 

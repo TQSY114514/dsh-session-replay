@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { CallId, MessageId } from '@deepseek-ai/dsh-llm'
 import { ReplayEngine } from '../src/engine/index.ts'
+import { foldAt } from '../src/engine/fold.ts'
 
 /** A minimal realistic two-turn log with staggered timestamps. */
 function sampleLog(): SessionEvent[] {
@@ -180,5 +181,46 @@ describe('ReplayEngine seeking', () => {
     expect(engine.seekToTurn(99)).toBe(false)
     expect(engine.seekToSeq(12345)).toBe(false)
     expect(engine.seekToStep(1, 99)).toBe(false)
+  })
+
+  it('resolves seekToSeq on logs whose seq does not start at zero', () => {
+    // Binary search must key on the seq values, not on array positions.
+    const offset = sampleLog().map(event => ({ ...event, seq: event.seq + 100 }))
+    const engine = new ReplayEngine(offset)
+    expect(engine.seekToSeq(103)).toBe(true)
+    expect(engine.snapshot.cursor).toBe(3)
+    expect(engine.seekToSeq(3)).toBe(false) // position exists, seq does not
+  })
+})
+
+describe('ReplayEngine incremental derived state', () => {
+  it('keeps folded equal to a fresh foldAt at every position, across steps and seeks', () => {
+    const log = sampleLog()
+    const engine = new ReplayEngine(log)
+    for (let cursor = 0; cursor <= log.length; cursor += 1) {
+      expect(engine.folded).toEqual(foldAt(log, cursor))
+      engine.step()
+    }
+    // Backward seek replays the fold from the empty state and stays consistent.
+    expect(engine.seekToTurn(1)).toBe(true)
+    expect(engine.folded).toEqual(foldAt(log, engine.snapshot.cursor))
+    engine.step()
+    engine.step()
+    expect(engine.folded).toEqual(foldAt(log, engine.snapshot.cursor))
+    // Forward seek folds only the delta and still matches.
+    expect(engine.seekToTurn(2)).toBe(true)
+    expect(engine.folded).toEqual(foldAt(log, engine.snapshot.cursor))
+  })
+
+  it('constructs from a log far larger than the spread-argument limit', () => {
+    // 100k events would exceed the ~65k push(...args) limit if the constructor
+    // spread the input; it must assign a sorted copy instead.
+    const events: SessionEvent[] = Array.from({ length: 100_000 }, (_, i): SessionEvent => ({
+      type: 'turn/start', seq: i, time: i, data: { turn: 1 },
+    }))
+    const engine = new ReplayEngine(events)
+    expect(engine.snapshot.total).toBe(100_000)
+    expect(engine.seekToSeq(99_999)).toBe(true)
+    expect(engine.snapshot.cursor).toBe(99_999)
   })
 })

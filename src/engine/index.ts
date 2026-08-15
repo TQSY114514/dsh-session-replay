@@ -1,6 +1,6 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { FoldedState, PlaybackSnapshot, Speed, TranscriptEntry } from '../types.ts'
-import { foldAt } from './fold.ts'
+import { applyFoldEvent, newFoldAccumulator } from './fold.ts'
 import { renderEvent } from './render.ts'
 import type { RenderDeps } from './render.ts'
 
@@ -16,9 +16,13 @@ import type { RenderDeps } from './render.ts'
  * playback time covers that event's real wall-clock gap (`next.time -
  * prev.time`), scaled by `speed`. Events with identical timestamps emit back
  * to back.
+ *
+ * Derived views (`folded`, tool-name resolution) are maintained incrementally
+ * as the cursor moves, so per-event cost is O(1) forward; only a backward seek
+ * re-scans, and even then just the region between the old and new positions.
  */
 export class ReplayEngine {
-  private readonly eventsArray: SessionEvent[] = []
+  private readonly eventsArray: SessionEvent[]
 
   /** The ordered event log, in seq order. Read-only view of the internal buffer. */
   get events(): readonly SessionEvent[] {
@@ -34,19 +38,28 @@ export class ReplayEngine {
   private lastSeq = -1
 
   private readonly toolNames = new Map<string, string>()
+  /** Events `[0, toolNamesUntil)` have contributed to `toolNames`. */
+  private toolNamesUntil = 0
   private readonly turnIndex = new Map<number, number>()
   private readonly stepIndex = new Map<string, number>()
+
+  /** Live folded state for `[0, foldUntil)`; `foldUntil` tracks the cursor. */
+  private readonly foldState = newFoldAccumulator()
+  private foldUntil = 0
 
   /** Called for every non-null rendered entry as playback advances. */
   onEmit: ((entry: TranscriptEntry) => void) | null = null
   /** Called once when playback reaches the final event. */
   onEnd: (() => void) | null = null
 
+  /** One shared dependency set: the tool-name map only ever grows in log order. */
+  private readonly renderDeps: RenderDeps = { toolName: callId => this.toolNames.get(callId) }
+
   constructor(events: readonly SessionEvent[]) {
-    this.eventsArray.push(...[...events].sort((a, b) => a.seq - b.seq))
-    this.lastSeq = this.eventsArray.length > 0
-      ? (this.eventsArray[this.eventsArray.length - 1]?.seq ?? -1)
-      : -1
+    // Assign (never `push(...spread)`): spreading a huge log would exceed the
+    // argument-count limit and throw for sessions with tens of thousands of events.
+    this.eventsArray = [...events].sort((a, b) => a.seq - b.seq)
+    this.lastSeq = this.eventsArray.at(-1)?.seq ?? -1
     this.buildIndexes(0)
   }
 
@@ -58,15 +71,15 @@ export class ReplayEngine {
    */
   append(newEvents: readonly SessionEvent[]): void {
     const startIndex = this.eventsArray.length
-    let added = 0
+    let added = false
     for (const event of newEvents) {
       if (event.seq > this.lastSeq) {
         this.eventsArray.push(event)
         this.lastSeq = event.seq
-        added += 1
+        added = true
       }
     }
-    if (added > 0) {
+    if (added) {
       this.buildIndexes(startIndex)
       this.ended = false
     }
@@ -82,13 +95,44 @@ export class ReplayEngine {
     }
   }
 
-  /** Rebuild the tool-name map from the prefix, after a backward seek. */
-  private rebuildToolNames(until: number): void {
-    this.toolNames.clear()
-    for (let i = 0; i < until; i += 1) {
-      const event = this.events[i]
+  /**
+   * Bring the tool-name map up to covering `[0, index)`. Backward targets
+   * rebuild from scratch (names from after the cut must not resolve); forward
+   * targets only scan the uncovered delta.
+   */
+  private syncToolNames(index: number): void {
+    if (index < this.toolNamesUntil) {
+      this.toolNames.clear()
+      this.toolNamesUntil = 0
+    }
+    for (let i = this.toolNamesUntil; i < index; i += 1) {
+      const event = this.eventsArray[i]
       if (event?.type === 'tool/call') this.toolNames.set(event.data.callId, event.data.name)
     }
+    this.toolNamesUntil = index
+  }
+
+  /**
+   * Bring the folded state up to covering `[0, index)`. Fold semantics are
+   * order-dependent but prefix-consistent, so a forward move only needs the
+   * delta; a backward move replays from the empty state.
+   */
+  private syncFold(index: number): void {
+    if (index < this.foldUntil) {
+      const fresh = newFoldAccumulator()
+      this.foldState.turn = fresh.turn
+      this.foldState.todos = fresh.todos
+      this.foldState.lastRequestReason = fresh.lastRequestReason
+      this.foldState.toolCallCount = fresh.toolCallCount
+      this.foldState.errorCount = fresh.errorCount
+      this.foldUntil = 0
+    }
+    for (let i = this.foldUntil; i < index; i += 1) {
+      const event = this.eventsArray[i]
+      if (event === undefined) break
+      applyFoldEvent(this.foldState, event)
+    }
+    this.foldUntil = index
   }
 
   get snapshot(): PlaybackSnapshot {
@@ -101,9 +145,9 @@ export class ReplayEngine {
     }
   }
 
-  /** Folded state at the current cursor. */
+  /** Folded state at the current cursor, maintained incrementally (O(1) here). */
   get folded(): FoldedState {
-    return foldAt(this.events, this.cursor)
+    return { ...this.foldState }
   }
 
   /** Start (or resume) automatic playback. No-op at the end of the log. */
@@ -139,12 +183,22 @@ export class ReplayEngine {
     return entry
   }
 
-  /** Move to the event with the given seq; returns false when absent. */
+  /** Move to the event with the given seq; returns false when absent. Binary search — the log is seq-sorted. */
   seekToSeq(seq: number): boolean {
-    const index = this.events.findIndex(event => event.seq === seq)
-    if (index === -1) return false
-    this.seekToIndex(index)
-    return true
+    let lo = 0
+    let hi = this.eventsArray.length - 1
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      const event = this.eventsArray[mid]
+      if (event === undefined) return false
+      if (event.seq === seq) {
+        this.seekToIndex(mid)
+        return true
+      }
+      if (event.seq < seq) lo = mid + 1
+      else hi = mid - 1
+    }
+    return false
   }
 
   /** Move to the first event of turn `n`; returns false when the turn is absent. */
@@ -155,7 +209,7 @@ export class ReplayEngine {
     return true
   }
 
-  /** Move to the first event of `(turn, step)`; returns false when absent. */
+  /** Move to the first event of `(turn, step)`; returns false when the turn is absent. */
   seekToStep(turn: number, step: number): boolean {
     const index = this.stepIndex.get(`${turn}:${step}`)
     if (index === undefined) return false
@@ -207,7 +261,8 @@ export class ReplayEngine {
     this.cursor = index
     this.ended = false
     this.pause()
-    this.rebuildToolNames(index)
+    this.syncToolNames(index)
+    this.syncFold(index)
   }
 
   /** Emit the current event, advance the cursor, and detect the end. */
@@ -217,9 +272,9 @@ export class ReplayEngine {
       this.finish()
       return null
     }
-    if (event.type === 'tool/call') this.toolNames.set(event.data.callId, event.data.name)
-    const deps: RenderDeps = { toolName: callId => this.toolNames.get(callId) }
-    const entry = renderEvent(event, deps)
+    this.syncToolNames(this.cursor + 1)
+    this.syncFold(this.cursor + 1)
+    const entry = renderEvent(event, this.renderDeps)
     this.cursor += 1
     if (entry !== null) this.onEmit?.(entry)
     if (this.cursor >= this.events.length) this.finish()

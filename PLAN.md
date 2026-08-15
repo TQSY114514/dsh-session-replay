@@ -562,3 +562,32 @@ conversation.view 新 tab(id 'replay', order 20):播放/暂停/单步/倍速 1·
 - [x] M6 完成(创建 child 部分)
 - [ ] 端到端重跑验证(需要 DEEPSEEK_API_KEY:resume child → 新 agent 继续 → diff 两次 run)
 - [ ] 浏览器真机验证(visual-qa / playwright)
+
+## 19. 全面优化执行记录(2026-08-15)
+
+> 目标:大 session(数万~数十万事件)下的性能与鲁棒性。全部改动不改变任何公开语义,现有 57 个测试断言逐一比对保持兼容,另补 6 个规模化回归测试(合计 63)。
+
+### 性能
+
+1. **`lcsPairs` 重写(diff.ts)**:原来 O(n·m) 嵌套数组全量 DP——两个万级 fingerprint 的 run 对比要分配上亿个 Number 单元格(GB 级),直接 OOM。现在:公共前后缀先行裁剪(同任务两次 run 的头部/尾部几乎全同,实测场景 DP 规模骤降为分叉区)→ 中段用扁平 `Int32Array` DP → 中段规模超过 `MAX_DP_CELLS`(16M 单元格 ≈ 64 MiB)说明两条 run 根本不同源,只保留锚点、中段按 only-a/only-b 报告,不建巨型表。三个既有 LCS 断言(含 duplicate-label 的 tie-break 场景)手工推演确认输出逐对相等。
+2. **`ReplayEngine.folded` 增量化**:原来每次访问 O(cursor) 全前缀重扫,而 CLI 播放器每 100ms tick 重绘状态行都要读它——5 万事件 = 每秒 50 万次扫描。现在引擎内持 `FoldAccumulator`(fold.ts 新增 `newFoldAccumulator`/`applyFoldEvent`,与 `foldAt` 共用同一份折叠语义),前进 O(1),前向 seek 只折增量,回退 seek 才从头重放。
+3. **构造函数去 `push(...spread)`**:spread 参数上限约 6.5 万,大日志直接 `RangeError`。改为赋值排序副本。补 100k 事件构造回归测试。
+4. **`seekToSeq` 二分**:日志本就按 seq 有序,原线性 `findIndex` 改二分;顺带不再假设 seq 从 0 连续。
+5. **toolNames 增量同步**:seek 不再全量重建 name map,前向只扫未覆盖增量。
+6. **`advance()` 去每事件闭包分配**:`renderDeps` 提升为单实例。
+7. **`runReplayCommand` 提前止步**:原来渲染全部行再截 6000 字符;现在字符预算覆盖上限即停止 drain,巨会话 O(cap) 而非 O(n),最终文本与先渲染后截断逐字符相同。
+
+### 真 bug 修复(代码走查发现)
+
+- **CLI 播放器 step 双打印**:`stepOnce` 里 `engine.step()` 已经通过 `onEmit` 打印条目,又自行再写一遍——每次按 `s` 条目出现两次。修复:stepOnce 只负责推进 + 重绘状态。
+- **状态行覆盖条目**:条目写入无尾换行,下一次 `\r\x1b[2K` 状态重绘会清掉刚写入的最后一行;`-- seeked --`/expand 消息同样被吃。修复:确立"状态行永远是最底行且不带换行,任何时间轴写入先 `\r\x1b[2K` 清状态行、自身以换行结尾"的终端纪律;附带"状态文本未变不重绘"(暂停时空转不再刷屏)。
+- **CLI diff 的 `textFor` 隐含假设 seq === 数组下标**:`run.events[fingerprint.seq]` 在 seq 非 0 基/非连续时静默错位(M5 修过"两侧各用各的渲染器",但这个更底层的位置假设还在)。修复:每侧建 `Map<seq, event>` O(1) 解析。
+
+### 验证方式说明
+
+本 standalone 仓库因 `@deepseek-ai/dsh-*` pre-release 依赖 npm 404 无法安装、无法运行完整 vitest(见 §13)。已在本机完成两层替代验证:
+
+1. **类型检查**:临时 tsconfig + permissive stub(外部包置 any、本地代码全量真实解析),`tsc --strict` 对 src/ + tests/ 全绿。
+2. **运行时冒烟**:tsx 直接运行纯 TS 核心(engine/fold/render/diff/player 无运行时外部依赖),把 engine.spec / diff.spec / fold.spec / live.spec 的**全部既有断言场景** + 新增回归场景(偏移 seq 二分、逐 cursor folded≡foldAt、100k 构造、20k 前后缀裁剪、5k×5k 病态回退、30k 全同序列)写成断言脚本执行,全部通过。
+
+仍需回官方 monorepo workspace 补跑:plugin/fork/integration 三个依赖真实 @deepseek-ai 后端的 suite(`vitest run` + `tsc -b`)。

@@ -23,9 +23,20 @@ export async function runReplayCommand(
   try {
     const run = await loadRun(ctx.sessionPersistence, targetId)
     const engine = new ReplayEngine(run.events)
+    // Render until the cap is covered, then stop draining: a giant session
+    // costs O(cap) work instead of rendering every row just to slice most of
+    // it away. The final text is identical to render-then-truncate.
     const lines: string[] = []
-    engine.onEmit = entry => { lines.push(renderEntryLine(entry)) }
-    while (engine.step() !== null) { /* drain */ }
+    let chars = 0
+    let capped = false
+    engine.onEmit = entry => {
+      if (capped) return
+      const line = renderEntryLine(entry)
+      lines.push(line)
+      chars += line.length + 1
+      if (chars > MAX_OUTPUT_CHARS) capped = true
+    }
+    while (!capped && engine.step() !== null) { /* drain */ }
     let text = lines.join('\n')
     if (text.length > MAX_OUTPUT_CHARS) {
       text = `${text.slice(0, MAX_OUTPUT_CHARS)}\n… (truncated at ${MAX_OUTPUT_CHARS} chars)`
