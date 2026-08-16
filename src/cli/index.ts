@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { ReplayEngine } from '../engine/index.ts'
 import { renderEntryLine } from './player.ts'
@@ -218,11 +219,17 @@ async function diffSessions(
   process.stdout.write(`  ${statsLine(String(runA.id), diff.a)}\n`)
   process.stdout.write(`  ${statsLine(String(runB.id), diff.b)}\n\n`)
 
-  const textFor = (run: LoadedRun) => (fingerprint: Fingerprint): string => {
-    const event = run.events[fingerprint.seq]
-    if (event === undefined) return fingerprint.label
-    const entry = renderEvent(event, noopRenderDeps)
-    return entry === null ? fingerprint.label : renderEntryLine(entry)
+  // Resolve rows by seq through a map, never by array position: seq numbering
+  // is a property of the log and must not be assumed to be a dense 0-based index.
+  const textFor = (run: LoadedRun) => {
+    const bySeq = new Map<number, SessionEvent>()
+    for (const event of run.events) bySeq.set(event.seq, event)
+    return (fingerprint: Fingerprint): string => {
+      const event = bySeq.get(fingerprint.seq)
+      if (event === undefined) return fingerprint.label
+      const entry = renderEvent(event, noopRenderDeps)
+      return entry === null ? fingerprint.label : renderEntryLine(entry)
+    }
   }
   const a = fingerprintEvents(runA.events)
   const b = fingerprintEvents(runB.events)

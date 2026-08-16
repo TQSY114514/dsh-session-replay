@@ -29,7 +29,7 @@ function sampleEvents(): SessionEvent[] {
   ]
 }
 
-async function makeCtx(): Promise<{ ctx: Context; id: SessionId }> {
+async function makeCtx(extraEvents: readonly SessionEvent[] = []): Promise<{ ctx: Context; id: SessionId }> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-replay-cmd-'))
   tempRoots.push(root)
   const ctx = new Context()
@@ -38,7 +38,7 @@ async function makeCtx(): Promise<{ ctx: Context; id: SessionId }> {
   const id = SessionId('cmd-test-session')
   const header: SessionHeader = { version: 0, id, createdAt: Date.now(), cwd: process.cwd() }
   await persistence.create(header)
-  await persistence.append(id, sampleEvents())
+  await persistence.append(id, [...sampleEvents(), ...extraEvents])
   return { ctx, id }
 }
 
@@ -70,6 +70,31 @@ describe('runReplayCommand', () => {
     expect(result.kind).toBe('success')
     if (result.kind === 'success') {
       expect(result.text).toContain('following live events')
+    }
+  })
+
+  it('caps a giant run at 6000 chars and skips the tail rows', async () => {
+    // ~120 user messages of ~110 chars each render to well over 12k chars of
+    // timeline: the drain must stop once the cap is covered and the final
+    // text must end with the truncation marker instead of the last rows.
+    // This is the only test that exercises the chars/capped path in plugin.ts
+    // (the other fixtures are far below the 6000-char cap).
+    const tailText = 'MARKER-TAIL-ROW'
+    const bigRun: SessionEvent[] = Array.from({ length: 120 }, (_, i) => ({
+      type: 'user/message', seq: i + 4, time: 1100 + i, surfaceOp: 'append',
+      data: {
+        id: MessageId(`u-cap-${i}`), role: 'user',
+        content: [{ type: 'text', text: i === 119 ? tailText : `pad-${i}-`.repeat(16) }],
+        source: { kind: 'user' },
+      },
+    }))
+    const { ctx, id } = await makeCtx(bigRun)
+    const result = await runReplayCommand(ctx, id, false)
+    expect(result.kind).toBe('success')
+    if (result.kind === 'success') {
+      expect(result.text.endsWith('… (truncated at 6000 chars)')).toBe(true)
+      // The final row was never rendered (drain stopped at the cap).
+      expect(result.text).not.toContain(tailText)
     }
   })
 })

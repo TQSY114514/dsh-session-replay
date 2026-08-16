@@ -11,7 +11,8 @@ export type {
   FoldedState, PlaybackSnapshot, Speed, TodoSummary, ToolCallRef, TranscriptEntry,
 } from './types.ts'
 export { ReplayEngine } from './engine/index.ts'
-export { foldAt } from './engine/fold.ts'
+export { applyFoldEvent, foldAt, newFoldAccumulator } from './engine/fold.ts'
+export type { FoldAccumulator } from './engine/fold.ts'
 export { noopRenderDeps, renderEvent, textOf } from './engine/render.ts'
 export type { RenderDeps } from './engine/render.ts'
 export { loadRun, rebuildSession } from './store/reader.ts'

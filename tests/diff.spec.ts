@@ -4,6 +4,7 @@ import { CallId, MessageId } from '@deepseek-ai/dsh-llm'
 import {
   alignRuns, computeStats, diffRuns, fingerprintEvents, lcsPairs, renderDiff,
 } from '../src/diff.ts'
+import type { Fingerprint } from '../src/diff.ts'
 
 function user(seq: number, time: number, text: string): SessionEvent {
   return {
@@ -107,6 +108,104 @@ describe('lcsPairs and alignRuns', () => {
       { kind: 'equal', aIndex: 0, bIndex: 0 },
       { kind: 'equal', aIndex: 1, bIndex: 1 },
       { kind: 'only-b', bIndex: 2 },
+    ])
+  })
+
+  it('aligns long same-task runs through the divergent middle only', () => {
+    // Two runs sharing a 20k-row prefix and suffix with a small divergent
+    // middle: the DP never sees the shared regions, so this stays fast and
+    // produces prefix pairs + middle alignment + suffix pairs.
+    const fp = (seq: number, label: string): Fingerprint => ({ seq, label })
+    const prefix = Array.from({ length: 20_000 }, (_, i) => fp(i, 'assistant'))
+    const suffix = Array.from({ length: 20_000 }, (_, i) => fp(30_000 + i, 'user'))
+    const a = [...prefix, fp(20_000, 'tool:grep'), fp(20_001, 'result:grep'), ...suffix]
+    const b = [...prefix, fp(20_000, 'tool:grep'), fp(20_001, 'result:grep'), fp(20_002, 'assistant'), ...suffix]
+    const pairs = lcsPairs(a, b)
+    // All of the prefix and suffix match; only B's extra assistant is unmatched.
+    expect(pairs).toHaveLength(a.length)
+    expect(pairs.at(-1)).toEqual({ aIndex: a.length - 1, bIndex: b.length - 1 })
+    expect(alignRuns(a, b).filter(op => op.kind === 'only-b')).toEqual([{ kind: 'only-b', bIndex: 20_002 }])
+  })
+
+  it('keeps only the trimmed anchors when the middle is too divergent for a table', () => {
+    // 5k × 5k distinct labels exceed the DP cell ceiling: the matcher must
+    // keep the shared head/tail and report the middles as unmatched rather
+    // than allocating a giant table.
+    const fp = (seq: number, label: string): Fingerprint => ({ seq, label })
+    const head = Array.from({ length: 10 }, (_, i) => fp(i, `head:${i}`))
+    const tailA = Array.from({ length: 10 }, (_, i) => fp(6000 + i, `tail:${i}`))
+    const midA = Array.from({ length: 5000 }, (_, i) => fp(10 + i, `a:${i}`))
+    const midB = Array.from({ length: 5000 }, (_, i) => fp(10 + i, `b:${i}`))
+    const a = [...head, ...midA, ...tailA]
+    const b = [...head, ...midB, ...tailA.map((_, i) => fp(6000 + i, `tail:${i}`))]
+    const pairs = lcsPairs(a, b)
+    expect(pairs).toHaveLength(20) // 10 head + 10 tail anchors, middles unmatched
+    expect(pairs[0]).toEqual({ aIndex: 0, bIndex: 0 })
+    expect(pairs.at(-1)).toEqual({ aIndex: a.length - 1, bIndex: b.length - 1 })
+  })
+
+  it('aligns two identical giant sequences fully through trimming alone', () => {
+    const a = Array.from({ length: 30_000 }, (_, i): Fingerprint => ({ seq: i, label: `row:${i % 50}` }))
+    const pairs = lcsPairs(a, a)
+    expect(pairs).toHaveLength(30_000)
+    expect(pairs.every((pair, i) => pair.aIndex === i && pair.bIndex === i)).toBe(true)
+  })
+
+  it('pins trailing labels to a tail-to-tail alignment on repeated labels', () => {
+    // a = [W, X, Z], b = [Z, Y, Z]: the trailing Z is trimmed to the common
+    // suffix, so the sole match is tail-to-tail (a2↔b2). The pre-trim greedy
+    // backtrack would instead align a2↔b0 (equal(2,0)); both are maximal LCS,
+    // this regression test pins the intentional tail-to-tail choice.
+    const fp = (seq: number, label: string): Fingerprint => ({ seq, label })
+    const a = [fp(0, 'tool:read_file'), fp(1, 'tool:grep'), fp(2, 'tool:bash')]
+    const b = [fp(0, 'tool:bash'), fp(1, 'tool:write_file'), fp(2, 'tool:bash')]
+    expect(lcsPairs(a, b)).toEqual([{ aIndex: 2, bIndex: 2 }])
+    expect(alignRuns(a, b)).toEqual([
+      { kind: 'only-a', aIndex: 0 },
+      { kind: 'only-a', aIndex: 1 },
+      { kind: 'only-b', bIndex: 0 },
+      { kind: 'only-b', bIndex: 1 },
+      { kind: 'equal', aIndex: 2, bIndex: 2 },
+    ])
+  })
+
+  it('fills and backtracks match cells in the flat-index middle DP', () => {
+    // Two runs with an 8-label common prefix and 6-label common suffix whose
+    // divergent middle holds three same-name matches (tool:grep, tool:bash,
+    // tool:read_file). The prefix/suffix are trimmed away, so the flat
+    // Int32Array DP runs over the middle only — this specifically exercises
+    // the match-cell fill and the backtrack match step of the rewritten DP
+    // (previously zero in-repo coverage: the other cases trim the whole
+    // middle away or hit the MAX_DP_CELLS fallback without running the DP).
+    const fp = (seq: number, label: string): Fingerprint => ({ seq, label })
+    const prefix = Array.from({ length: 8 }, (_, i) => fp(i, 'user'))
+    const a = [
+      ...prefix,
+      fp(8, 'tool:read_file'), fp(9, 'tool:grep'), fp(10, 'tool:bash'), fp(11, 'tool:write_file'),
+      ...Array.from({ length: 6 }, (_, i) => fp(12 + i, 'assistant')),
+    ]
+    const b = [
+      ...prefix,
+      fp(8, 'tool:glob'), fp(9, 'tool:grep'), fp(10, 'tool:edit'),
+      fp(11, 'tool:read_file'), fp(12, 'tool:bash'),
+      ...Array.from({ length: 6 }, (_, i) => fp(13 + i, 'assistant')),
+    ]
+    expect(lcsPairs(a, b)).toEqual([
+      ...Array.from({ length: 8 }, (_, i) => ({ aIndex: i, bIndex: i })),
+      { aIndex: 9, bIndex: 9 },
+      { aIndex: 10, bIndex: 12 },
+      ...Array.from({ length: 6 }, (_, i) => ({ aIndex: 12 + i, bIndex: 13 + i })),
+    ])
+    expect(alignRuns(a, b)).toEqual([
+      ...Array.from({ length: 8 }, (_, i) => ({ kind: 'equal', aIndex: i, bIndex: i })),
+      { kind: 'only-a', aIndex: 8 },
+      { kind: 'only-b', bIndex: 8 },
+      { kind: 'equal', aIndex: 9, bIndex: 9 },
+      { kind: 'only-b', bIndex: 10 },
+      { kind: 'only-b', bIndex: 11 },
+      { kind: 'equal', aIndex: 10, bIndex: 12 },
+      { kind: 'only-a', aIndex: 11 },
+      ...Array.from({ length: 6 }, (_, i) => ({ kind: 'equal', aIndex: 12 + i, bIndex: 13 + i })),
     ])
   })
 })

@@ -102,12 +102,29 @@ export function computeStats(events: readonly SessionEvent[]): RunStats {
 }
 
 /**
+ * DP cell ceiling for the middle (post-trim) alignment: beyond this the two
+ * runs are so divergent that a full table is not worth allocating — alignment
+ * falls back to the trimmed anchors only. 16M cells ≈ a 64 MiB Int32Array.
+ */
+const MAX_DP_CELLS = 16_000_000
+
+/**
  * Longest common subsequence alignment of two fingerprint sequences. Returns
  * the matched (aIndex, bIndex) pairs in ascending order.
  *
- * Classic O(n·m) DP with a full table for backtracking; fine for typical
- * session logs (thousands of events) and documented as a ceiling for
- * pathological multi-tens-of-thousands logs.
+ * Scaling: the common prefix and suffix are trimmed first (the same-task runs
+ * this tool compares share their head and tail, often tens of thousands of
+ * events), and the DP runs only over the divergent middle, in a flat
+ * Int32Array. A middle larger than `MAX_DP_CELLS` means the runs are almost
+ * entirely different — those keep the trimmed anchors and report the middles
+ * as unmatched instead of allocating a giant table.
+ *
+ * Tie-break note: trimming the common suffix pins any matching trailing
+ * labels to a *tail-to-tail* alignment (the last common label aligns to the
+ * last common label). The pre-trim greedy backtrack over the full table could
+ * instead align a trailing label to an earlier same-named label on the other
+ * side. Both are legal maximal-LCS choices; the tail-to-tail pick is
+ * intentional and pinned by a regression test in tests/diff.spec.ts.
  */
 export function lcsPairs(
   a: readonly Fingerprint[],
@@ -115,34 +132,55 @@ export function lcsPairs(
 ): Array<{ readonly aIndex: number; readonly bIndex: number }> {
   const n = a.length
   const m = b.length
-  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0))
-  for (let i = n - 1; i >= 0; i -= 1) {
-    const aLabel = a[i]?.label
-    for (let j = m - 1; j >= 0; j -= 1) {
-      const above = dp[i + 1]?.[j] ?? 0
-      const left = dp[i]?.[j + 1] ?? 0
-      if (aLabel !== undefined && aLabel === b[j]?.label) {
-        dp[i]![j] = (dp[i + 1]?.[j + 1] ?? 0) + 1
+  const pairs: Array<{ readonly aIndex: number; readonly bIndex: number }> = []
+
+  // Trim the common prefix (always part of a maximal LCS).
+  let prefix = 0
+  while (prefix < n && prefix < m && a[prefix]?.label === b[prefix]?.label) prefix += 1
+  for (let k = 0; k < prefix; k += 1) pairs.push({ aIndex: k, bIndex: k })
+
+  // Trim the common suffix without overlapping the prefix.
+  let suffix = 0
+  while (
+    suffix < n - prefix && suffix < m - prefix
+    && a[n - 1 - suffix]?.label === b[m - 1 - suffix]?.label
+  ) suffix += 1
+
+  const midN = n - prefix - suffix
+  const midM = m - prefix - suffix
+  if (midN > 0 && midM > 0 && (midN + 1) * (midM + 1) <= MAX_DP_CELLS) {
+    // Classic O(midN·midM) DP over a flat Int32Array, backtracked greedily.
+    const width = midM + 1
+    const dp = new Int32Array((midN + 1) * width)
+    for (let i = midN - 1; i >= 0; i -= 1) {
+      const aLabel = a[prefix + i]?.label
+      const row = i * width
+      const below = (i + 1) * width
+      for (let j = midM - 1; j >= 0; j -= 1) {
+        const above = dp[below + j]
+        const left = dp[row + j + 1]
+        dp[row + j] = aLabel !== undefined && aLabel === b[prefix + j]?.label
+          ? dp[below + j + 1] + 1
+          : above >= left ? above : left
+      }
+    }
+    let i = 0
+    let j = 0
+    while (i < midN && j < midM) {
+      const aLabel = a[prefix + i]?.label
+      if (aLabel !== undefined && aLabel === b[prefix + j]?.label) {
+        pairs.push({ aIndex: prefix + i, bIndex: prefix + j })
+        i += 1
+        j += 1
+      } else if (dp[(i + 1) * width + j] >= dp[i * width + j + 1]) {
+        i += 1
       } else {
-        dp[i]![j] = above >= left ? above : left
+        j += 1
       }
     }
   }
-  const pairs: Array<{ readonly aIndex: number; readonly bIndex: number }> = []
-  let i = 0
-  let j = 0
-  while (i < n && j < m) {
-    const aLabel = a[i]?.label
-    if (aLabel !== undefined && aLabel === b[j]?.label) {
-      pairs.push({ aIndex: i, bIndex: j })
-      i += 1
-      j += 1
-    } else if ((dp[i + 1]?.[j] ?? 0) >= (dp[i]?.[j + 1] ?? 0)) {
-      i += 1
-    } else {
-      j += 1
-    }
-  }
+
+  for (let k = 0; k < suffix; k += 1) pairs.push({ aIndex: n - suffix + k, bIndex: m - suffix + k })
   return pairs
 }
 

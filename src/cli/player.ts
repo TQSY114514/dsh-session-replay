@@ -85,6 +85,12 @@ const HELP_LINE = 'space play/pause | s step | [ ] prev/next turn | up/down sele
 /**
  * Run the interactive terminal player over an engine. Resolves when the user
  * quits or playback reaches the end.
+ *
+ * Terminal discipline: the status line is always the bottom line and is never
+ * newline-terminated. Every timeline write first clears that line
+ * (`\r\x1b[2K`), prints its rows newline-terminated, and the next paint puts
+ * the status back on the fresh bottom line — so no entry row is ever
+ * overwritten, and an unchanged status is not rewritten (no idle flicker).
  */
 export function runPlayer(engine: ReplayEngine): Promise<void> {
   return new Promise(resolve => {
@@ -97,24 +103,32 @@ export function runPlayer(engine: ReplayEngine): Promise<void> {
     const selectedEntry = (): TranscriptEntry | undefined =>
       selectedIndex >= 0 ? toolRows[selectedIndex] : undefined
 
+    let lastStatus = ''
+    /** Mark the on-screen status line as destroyed; the next paint must rewrite it. */
+    const invalidateStatus = (): void => {
+      lastStatus = ''
+    }
+
+    const paintStatus = (): void => {
+      const line = statusLine(engine, selectedEntry())
+      if (line === lastStatus) return
+      lastStatus = line
+      process.stdout.write(`\r\x1b[2K${line}`)
+    }
+
     engine.onEmit = entry => {
       if (entry.kind === 'tool-call' || entry.kind === 'tool-result') toolRows.push(entry)
-      process.stdout.write(`\n${renderEntryLine(entry)}`)
+      process.stdout.write(`\r\x1b[2K${renderEntryLine(entry)}\n`)
+      invalidateStatus()
     }
     engine.onEnd = () => {
       process.stdout.write('\n\n== replay finished ==\n')
       shutdown()
     }
 
-    let statusVisible = false
-    const paintStatus = (): void => {
-      process.stdout.write(`\r\x1b[2K${statusLine(engine, selectedEntry())}`)
-      statusVisible = true
-    }
-
     const stepOnce = (): void => {
-      const entry = engine.step()
-      if (entry !== null) process.stdout.write(`\n${renderEntryLine(entry)}`)
+      // The emitted entry (if any) already printed via onEmit — never twice.
+      engine.step()
       paintStatus()
     }
 
@@ -122,7 +136,8 @@ export function runPlayer(engine: ReplayEngine): Promise<void> {
       const current = engine.folded.turn ?? 1
       const target = Math.max(1, current + direction)
       if (engine.seekToTurn(target)) {
-        process.stdout.write(`\n-- seeked to turn ${target} --`)
+        process.stdout.write(`\r\x1b[2K-- seeked to turn ${target} --\n`)
+        invalidateStatus()
         paintStatus()
       }
     }
@@ -141,7 +156,8 @@ export function runPlayer(engine: ReplayEngine): Promise<void> {
       if (entry === undefined) return
       const text = expandedToolText(entry)
       if (text === null) return
-      process.stdout.write(`\n${color(90, `-- expand [${entry.seq}] --`)}\n${text}`)
+      process.stdout.write(`\r\x1b[2K${color(90, `-- expand [${entry.seq}] --`)}\n${text}\n`)
+      invalidateStatus()
       paintStatus()
     }
 
@@ -217,7 +233,7 @@ export function runPlayer(engine: ReplayEngine): Promise<void> {
 
     const timer = setInterval(() => {
       engine.tick(Date.now())
-      if (statusVisible || engine.snapshot.playing) paintStatus()
+      paintStatus()
     }, TICK_MS)
 
     paintStatus()

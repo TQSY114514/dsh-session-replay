@@ -16,7 +16,7 @@ It is **not** a monitor and does not re-run LLMs. The recording is already done 
 
 ## Status: work in progress (M1 core)
 
-Engine, renderer, store reader, and CLI are implemented and green (28 vitest tests, `tsc -b` clean), including a real end-to-end round trip through the JSONL persistence backend.
+Engine, renderer, store reader, and CLI are implemented and green (63 vitest tests, `tsc -b` clean), including a real end-to-end round trip through the JSONL persistence backend. Large-session scalability pass done: diff alignment trims common head/tail before a flat-`Int32Array` DP (with a documented fallback for pathologically divergent runs), and the engine maintains folded state incrementally (O(1) per event) — see [PLAN.md](PLAN.md) §19.
 
 **Installation note**: the `@deepseek-ai/dsh-*` packages are pre-release and their dependency graph is not yet fully published to npm (several peer packages 404). Until the official release is complete, this code is developed inside the harness monorepo workspace (`packages/session/session-replay`); this repository is the standalone home. See [PLAN.md](PLAN.md) for the full design and M1 execution notes.
 
