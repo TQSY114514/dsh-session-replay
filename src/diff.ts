@@ -118,6 +118,13 @@ const MAX_DP_CELLS = 16_000_000
  * Int32Array. A middle larger than `MAX_DP_CELLS` means the runs are almost
  * entirely different — those keep the trimmed anchors and report the middles
  * as unmatched instead of allocating a giant table.
+ *
+ * Tie-break note: trimming the common suffix pins any matching trailing
+ * labels to a *tail-to-tail* alignment (the last common label aligns to the
+ * last common label). The pre-trim greedy backtrack over the full table could
+ * instead align a trailing label to an earlier same-named label on the other
+ * side. Both are legal maximal-LCS choices; the tail-to-tail pick is
+ * intentional and pinned by a regression test in tests/diff.spec.ts.
  */
 export function lcsPairs(
   a: readonly Fingerprint[],

@@ -565,11 +565,11 @@ conversation.view 新 tab(id 'replay', order 20):播放/暂停/单步/倍速 1·
 
 ## 19. 全面优化执行记录(2026-08-15)
 
-> 目标:大 session(数万~数十万事件)下的性能与鲁棒性。全部改动不改变任何公开语义,现有 57 个测试断言逐一比对保持兼容,另补 6 个规模化回归测试(合计 63)。
+> 目标:大 session(数万~数十万事件)下的性能与鲁棒性。改动不改变任何公开 API;lcsPairs 的后缀裁剪会让重复标签的 tie-break 选择变为"尾对尾"(见第 1 条说明,已用回归测试钉住),其余断言逐一比对保持兼容,另补 6 个规模化回归测试(合计 63)。
 
 ### 性能
 
-1. **`lcsPairs` 重写(diff.ts)**:原来 O(n·m) 嵌套数组全量 DP——两个万级 fingerprint 的 run 对比要分配上亿个 Number 单元格(GB 级),直接 OOM。现在:公共前后缀先行裁剪(同任务两次 run 的头部/尾部几乎全同,实测场景 DP 规模骤降为分叉区)→ 中段用扁平 `Int32Array` DP → 中段规模超过 `MAX_DP_CELLS`(16M 单元格 ≈ 64 MiB)说明两条 run 根本不同源,只保留锚点、中段按 only-a/only-b 报告,不建巨型表。三个既有 LCS 断言(含 duplicate-label 的 tie-break 场景)手工推演确认输出逐对相等。
+1. **`lcsPairs` 重写(diff.ts)**:原来 O(n·m) 嵌套数组全量 DP——两个万级 fingerprint 的 run 对比要分配上亿个 Number 单元格(GB 级),直接 OOM。现在:公共前后缀先行裁剪(同任务两次 run 的头部/尾部几乎全同,实测场景 DP 规模骤降为分叉区)→ 中段用扁平 `Int32Array` DP → 中段规模超过 `MAX_DP_CELLS`(16M 单元格 ≈ 64 MiB)说明两条 run 根本不同源,只保留锚点、中段按 only-a/only-b 报告,不建巨型表。**tie-break 说明**:后缀裁剪会把重复的尾部标签钉成"尾对尾"对齐(如 `a=[W,X,Z]` vs `b=[Z,Y,Z]` 的尾 Z 对齐 b 的尾 Z,而不是旧版全表贪心回溯的"对齐 b 的首 Z")——两者都是合法的最大化 LCS,属有意行为变更,已由 `tests/diff.spec.ts` 的回归测试钉住;三个既有 LCS 断言仍通过,仅因其中间段被前缀裁剪整段吞掉(midN=0),DP 并未运行。
 2. **`ReplayEngine.folded` 增量化**:原来每次访问 O(cursor) 全前缀重扫,而 CLI 播放器每 100ms tick 重绘状态行都要读它——5 万事件 = 每秒 50 万次扫描。现在引擎内持 `FoldAccumulator`(fold.ts 新增 `newFoldAccumulator`/`applyFoldEvent`,与 `foldAt` 共用同一份折叠语义),前进 O(1),前向 seek 只折增量,回退 seek 才从头重放。
 3. **构造函数去 `push(...spread)`**:spread 参数上限约 6.5 万,大日志直接 `RangeError`。改为赋值排序副本。补 100k 事件构造回归测试。
 4. **`seekToSeq` 二分**:日志本就按 seq 有序,原线性 `findIndex` 改二分;顺带不再假设 seq 从 0 连续。

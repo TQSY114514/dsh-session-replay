@@ -119,12 +119,8 @@ export class ReplayEngine {
    */
   private syncFold(index: number): void {
     if (index < this.foldUntil) {
-      const fresh = newFoldAccumulator()
-      this.foldState.turn = fresh.turn
-      this.foldState.todos = fresh.todos
-      this.foldState.lastRequestReason = fresh.lastRequestReason
-      this.foldState.toolCallCount = fresh.toolCallCount
-      this.foldState.errorCount = fresh.errorCount
+      // 整体重置为新的累加器（逐字段手工重置易漏掉未来新增字段）
+      Object.assign(this.foldState, newFoldAccumulator())
       this.foldUntil = 0
     }
     for (let i = this.foldUntil; i < index; i += 1) {
@@ -147,7 +143,9 @@ export class ReplayEngine {
 
   /** Folded state at the current cursor, maintained incrementally (O(1) here). */
   get folded(): FoldedState {
-    return { ...this.foldState }
+    // todos 数组与内部状态隔离：外部消费方（CLI/Web 面板）的原地修改
+    // 不能破坏引擎内部累加状态。todos 很小，拷贝代价可忽略。
+    return { ...this.foldState, todos: [...this.foldState.todos] }
   }
 
   /** Start (or resume) automatic playback. No-op at the end of the log. */
